@@ -94,6 +94,17 @@ jobs:
               echo "❌ Failed to update $FILENAME (HTTP $HTTP_STATUS)"
               cat /tmp/response.json
               SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | update failed (HTTP $HTTP_STATUS) |\n"
+              # Write error details to step summary for API-accessible debugging
+              echo "## ❌ Deploy Error" >> $GITHUB_STEP_SUMMARY
+              echo "**File:** \`$FILENAME\` | **HTTP:** $HTTP_STATUS" >> $GITHUB_STEP_SUMMARY
+              echo "**n8n response:**" >> $GITHUB_STEP_SUMMARY
+              echo '```json' >> $GITHUB_STEP_SUMMARY
+              cat /tmp/response.json >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "**Payload sent (first 1000 chars):**" >> $GITHUB_STEP_SUMMARY
+              echo '```json' >> $GITHUB_STEP_SUMMARY
+              cat /tmp/payload.json | head -c 1000 >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
               exit 1
             fi
 
