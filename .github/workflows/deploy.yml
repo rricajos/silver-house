@@ -82,12 +82,16 @@ jobs:
             SHOULD_BE_ACTIVE=$(jq -r '.active // true' "$FILE")
             echo "::notice::ACTIVE=$SHOULD_BE_ACTIVE"
 
-            echo "::notice::JQ_DEL_START"
             echo "📤 Updating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
+
+            # Deactivate first — n8n validates sub-workflow refs when updating active workflows
+            echo "⏸️  Deactivating before update..."
+            curl -s -o /dev/null --max-time 30 \
+              -X POST "$N8N_URL/api/v1/workflows/$WORKFLOW_ID/deactivate" \
+              -H "X-N8N-API-KEY: $N8N_API_KEY" || true
 
             # Whitelist: only send fields n8n PUT API expects
             jq '{name,nodes,connections,settings:(.settings|del(.maxConcurrency,.availableInMCP))} + if .staticData != null then {staticData} else {} end' "$FILE" > /tmp/payload.json
-            echo "::notice::JQ_DEL_OK payload_size=$(wc -c < /tmp/payload.json)"
 
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --max-time 30 \
@@ -96,30 +100,24 @@ jobs:
               -H "Content-Type: application/json" \
               -d @/tmp/payload.json)
 
-            echo "::notice::CURL_HTTP=$HTTP_STATUS"
+            echo "::notice::PUT_HTTP=$HTTP_STATUS"
             if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
               echo "✅ Updated $FILENAME (HTTP $HTTP_STATUS)"
             else
-              echo "::error::CURL_FAIL HTTP=$HTTP_STATUS n8n=$(head -c 500 /tmp/response.json)"
+              echo "::error::PUT_FAIL HTTP=$HTTP_STATUS n8n=$(head -c 500 /tmp/response.json)"
               echo "❌ Failed to update $FILENAME (HTTP $HTTP_STATUS)"
               cat /tmp/response.json
               SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | update failed (HTTP $HTTP_STATUS) |\n"
-              # Write error details to step summary for API-accessible debugging
               echo "## ❌ Deploy Error" >> $GITHUB_STEP_SUMMARY
               echo "**File:** \`$FILENAME\` | **HTTP:** $HTTP_STATUS" >> $GITHUB_STEP_SUMMARY
-              echo "**n8n response:**" >> $GITHUB_STEP_SUMMARY
               echo '```json' >> $GITHUB_STEP_SUMMARY
               cat /tmp/response.json >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              echo "**Payload sent (first 1000 chars):**" >> $GITHUB_STEP_SUMMARY
-              echo '```json' >> $GITHUB_STEP_SUMMARY
-              cat /tmp/payload.json | head -c 1000 >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
               exit 1
             fi
 
             # Activate or deactivate based on the 'active' field in the JSON
-            if [ "$SHOULD_BE_ACTIVE" = "true" ]; then
+            if [ "$SHOULD_BE_ACTIVE" = "true" ] || [ "$SHOULD_BE_ACTIVE" = "True" ]; then
               echo "▶️  Activating '$FILENAME'..."
               ACT_STATUS=$(curl -s -o /tmp/act_response.json -w "%{http_code}" \
                 --max-time 30 \
@@ -127,7 +125,7 @@ jobs:
                 -H "X-N8N-API-KEY: $N8N_API_KEY")
               ACT_LABEL="activated"
             else
-              echo "⏸️  Deactivating '$FILENAME' (active=false in JSON)..."
+              echo "⏸️  Keeping '$FILENAME' deactivated (active=false in JSON)..."
               ACT_STATUS=$(curl -s -o /tmp/act_response.json -w "%{http_code}" \
                 --max-time 30 \
                 -X POST "$N8N_URL/api/v1/workflows/$WORKFLOW_ID/deactivate" \
