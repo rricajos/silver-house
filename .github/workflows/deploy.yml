@@ -79,7 +79,7 @@ jobs:
 
             # Strip fields not accepted by n8n PUT API
             # Use del() to remove known-bad fields — simpler and more resilient than whitelisting
-            jq 'del(.id,.active,.isArchived,.createdAt,.updatedAt,.tags,.meta,.versionId,.pinData,.description,.settings.maxConcurrency,.settings.availableInMCP) | if .staticData == null then del(.staticData) else . end' "$FILE" > /tmp/payload.json
+            jq 'del(.id,.active,.isArchived,.createdAt,.updatedAt,.tags,.meta,.versionId,.pinData,.description,.activeVersionId,.activeVersion,.versionCounter,.triggerCount,.shared,.settings.maxConcurrency,.settings.availableInMCP) | if .staticData == null then del(.staticData) else . end' "$FILE" > /tmp/payload.json
 
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --max-time 30 \
