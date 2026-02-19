@@ -66,9 +66,19 @@ jobs:
             fi
 
             # Validate JSON before sending
-            if ! jq empty "$FILE" 2>/dev/null; then
+            JQ_ERR=$(jq empty "$FILE" 2>&1)
+            if [ $? -ne 0 ]; then
               echo "❌ Invalid JSON in $FILENAME, aborting."
-              SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | invalid JSON |\n"
+              echo "jq error: $JQ_ERR"
+              echo "## ❌ JSON Validation Error" >> $GITHUB_STEP_SUMMARY
+              echo "**File:** \`$FILENAME\`" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "$JQ_ERR" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "**File head (first 500 bytes hex):**" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              xxd "$FILE" | head -5 >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
               exit 1
             fi
 
