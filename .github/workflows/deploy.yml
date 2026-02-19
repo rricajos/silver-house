@@ -85,9 +85,8 @@ jobs:
             echo "::notice::JQ_DEL_START"
             echo "📤 Updating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
 
-            # Strip fields not accepted by n8n PUT API
-            # Use del() to remove known-bad fields — simpler and more resilient than whitelisting
-            jq 'del(.id,.active,.isArchived,.createdAt,.updatedAt,.tags,.meta,.versionId,.pinData,.description,.activeVersionId,.activeVersion,.versionCounter,.triggerCount,.shared,.settings.maxConcurrency,.settings.availableInMCP) | if .staticData == null then del(.staticData) else . end' "$FILE" > /tmp/payload.json
+            # Whitelist: only send fields n8n PUT API expects
+            jq '{name,nodes,connections,settings:(.settings|del(.maxConcurrency,.availableInMCP))} + if .staticData != null then {staticData} else {} end' "$FILE" > /tmp/payload.json
             echo "::notice::JQ_DEL_OK payload_size=$(wc -c < /tmp/payload.json)"
 
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
@@ -101,7 +100,7 @@ jobs:
             if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
               echo "✅ Updated $FILENAME (HTTP $HTTP_STATUS)"
             else
-              echo "::error::CURL_FAIL HTTP=$HTTP_STATUS"
+              echo "::error::CURL_FAIL HTTP=$HTTP_STATUS n8n=$(head -c 500 /tmp/response.json)"
               echo "❌ Failed to update $FILENAME (HTTP $HTTP_STATUS)"
               cat /tmp/response.json
               SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | update failed (HTTP $HTTP_STATUS) |\n"
