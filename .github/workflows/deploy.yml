@@ -78,7 +78,22 @@ jobs:
             echo "📤 Updating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
 
             # Strip fields not accepted by n8n PUT API
-            jq '{name, nodes, connections, settings, staticData}' "$FILE" > /tmp/payload.json
+            # Filter settings to only known-safe fields to avoid schema validation errors
+            jq '{
+              name,
+              nodes,
+              connections,
+              settings: (.settings // {} | {
+                executionOrder,
+                saveManualExecutions,
+                callerPolicy,
+                errorWorkflow,
+                timezone,
+                saveDataSuccessExecution,
+                saveDataErrorExecution
+              } | with_entries(select(.value != null))),
+              staticData: (.staticData // null)
+            } | if .staticData == null then del(.staticData) else . end' "$FILE" > /tmp/payload.json
 
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --max-time 30 \
