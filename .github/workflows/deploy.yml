@@ -69,6 +69,20 @@ jobs:
               cat /tmp/response.json
               exit 1
             fi
+
+            echo "▶️  Activating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
+
+            ACT_STATUS=$(curl -s -o /tmp/activate_response.json -w "%{http_code}" \
+              -X POST "$N8N_URL/api/v1/workflows/$WORKFLOW_ID/activate" \
+              -H "X-N8N-API-KEY: $N8N_API_KEY")
+
+            if [ "$ACT_STATUS" -ge 200 ] && [ "$ACT_STATUS" -lt 300 ]; then
+              echo "✅ Workflow '$FILENAME' activated successfully"
+            else
+              echo "❌ Failed to activate $FILENAME (HTTP $ACT_STATUS)"
+              cat /tmp/activate_response.json
+              exit 1
+            fi
           done <<< "${{ steps.changed.outputs.files }}"
 
       - name: No workflow changes detected
