@@ -37,11 +37,7 @@ jobs:
             [ -z "$FILE" ] && continue
 
             FILENAME=$(basename "$FILE")
-            WORKFLOW_ID=$(echo "$MAPPING" | python3 -c "
-          import sys, json
-          mapping = json.load(sys.stdin)
-          print(mapping.get('$FILENAME', ''))
-          ")
+            WORKFLOW_ID=$(echo "$MAPPING" | jq -r --arg f "$FILENAME" '.[$f] // ""')
 
             if [ -z "$WORKFLOW_ID" ]; then
               echo "⚠️  No mapping found for $FILENAME, skipping."
@@ -50,11 +46,14 @@ jobs:
 
             echo "📤 Updating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
 
+            # Strip fields not accepted by n8n PUT API — only name, nodes, connections, settings, staticData are allowed
+            jq '{name, nodes, connections, settings, staticData}' "$FILE" > /tmp/payload.json
+
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               -X PUT "$N8N_URL/api/v1/workflows/$WORKFLOW_ID" \
               -H "X-N8N-API-KEY: $N8N_API_KEY" \
               -H "Content-Type: application/json" \
-              -d @"$FILE")
+              -d @/tmp/payload.json)
 
             if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
               echo "✅ Successfully updated $FILENAME (HTTP $HTTP_STATUS)"
