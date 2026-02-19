@@ -50,19 +50,17 @@ jobs:
           N8N_URL: ${{ secrets.N8N_URL }}
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
         run: |
-          # Redirect stderr to trace file; on any error, dump trace to step summary
-          exec 2>/tmp/bash_trace.txt
-          trap 'echo "## Bash trace (ERR)" >> $GITHUB_STEP_SUMMARY; echo '"'"'```'"'"' >> $GITHUB_STEP_SUMMARY; cat /tmp/bash_trace.txt >> $GITHUB_STEP_SUMMARY; echo '"'"'```'"'"' >> $GITHUB_STEP_SUMMARY' ERR
-          set -x
-
+          echo "::notice::DEPLOY_START files=${{ steps.changed.outputs.files }}"
           MAPPING=$(cat workflows/mapping.json)
           SUMMARY=""
 
           while IFS= read -r FILE; do
             [ -z "$FILE" ] && continue
+            echo "::notice::LOOP_FILE=$FILE"
 
             FILENAME=$(basename "$FILE")
             WORKFLOW_ID=$(echo "$MAPPING" | jq -r --arg f "$FILENAME" '.[$f] // ""')
+            echo "::notice::WORKFLOW_ID=$WORKFLOW_ID"
 
             if [ -z "$WORKFLOW_ID" ]; then
               echo "⚠️  No mapping found for $FILENAME, skipping."
@@ -70,32 +68,27 @@ jobs:
               continue
             fi
 
+            echo "::notice::JQ_VALIDATE_START"
             # Validate JSON before sending
-            # Use if/else to avoid set -eo pipefail killing the script on jq failure
             if ! jq empty "$FILE" 2>/tmp/jq_err.txt; then
               JQ_ERR=$(cat /tmp/jq_err.txt)
-              echo "❌ Invalid JSON in $FILENAME, aborting."
-              echo "jq error: $JQ_ERR"
-              echo "## ❌ JSON Validation Error" >> $GITHUB_STEP_SUMMARY
-              echo "**File:** \`$FILENAME\`" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              echo "$JQ_ERR" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              echo "**File head (first 200 bytes hex):**" >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
-              xxd "$FILE" | head -5 >> $GITHUB_STEP_SUMMARY
-              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "::error::JQ_FAIL=$JQ_ERR"
+              echo "❌ Invalid JSON in $FILENAME: $JQ_ERR"
               exit 1
             fi
+            echo "::notice::JQ_VALIDATE_OK"
 
             # Read whether the workflow should be active
             SHOULD_BE_ACTIVE=$(jq -r '.active // true' "$FILE")
+            echo "::notice::ACTIVE=$SHOULD_BE_ACTIVE"
 
+            echo "::notice::JQ_DEL_START"
             echo "📤 Updating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
 
             # Strip fields not accepted by n8n PUT API
             # Use del() to remove known-bad fields — simpler and more resilient than whitelisting
             jq 'del(.id,.active,.isArchived,.createdAt,.updatedAt,.tags,.meta,.versionId,.pinData,.description,.activeVersionId,.activeVersion,.versionCounter,.triggerCount,.shared,.settings.maxConcurrency,.settings.availableInMCP) | if .staticData == null then del(.staticData) else . end' "$FILE" > /tmp/payload.json
+            echo "::notice::JQ_DEL_OK payload_size=$(wc -c < /tmp/payload.json)"
 
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --max-time 30 \
@@ -104,9 +97,11 @@ jobs:
               -H "Content-Type: application/json" \
               -d @/tmp/payload.json)
 
+            echo "::notice::CURL_HTTP=$HTTP_STATUS"
             if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
               echo "✅ Updated $FILENAME (HTTP $HTTP_STATUS)"
             else
+              echo "::error::CURL_FAIL HTTP=$HTTP_STATUS"
               echo "❌ Failed to update $FILENAME (HTTP $HTTP_STATUS)"
               cat /tmp/response.json
               SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | update failed (HTTP $HTTP_STATUS) |\n"
