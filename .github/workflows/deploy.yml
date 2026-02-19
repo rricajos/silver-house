@@ -1,0 +1,70 @@
+name: Deploy n8n Workflows
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'workflows/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed workflow files
+        id: changed
+        run: |
+          CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'workflows/*.json' | grep -v 'workflows/mapping.json' || true)
+          echo "files<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Deploy changed workflows to n8n
+        if: steps.changed.outputs.files != ''
+        env:
+          N8N_URL: ${{ secrets.N8N_URL }}
+          N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+        run: |
+          MAPPING=$(cat workflows/mapping.json)
+
+          while IFS= read -r FILE; do
+            [ -z "$FILE" ] && continue
+
+            FILENAME=$(basename "$FILE")
+            WORKFLOW_ID=$(echo "$MAPPING" | python3 -c "
+          import sys, json
+          mapping = json.load(sys.stdin)
+          print(mapping.get('$FILENAME', ''))
+          ")
+
+            if [ -z "$WORKFLOW_ID" ]; then
+              echo "⚠️  No mapping found for $FILENAME, skipping."
+              continue
+            fi
+
+            echo "📤 Updating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
+
+            HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+              -X PUT "$N8N_URL/api/v1/workflows/$WORKFLOW_ID" \
+              -H "X-N8N-API-KEY: $N8N_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d @"$FILE")
+
+            if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+              echo "✅ Successfully updated $FILENAME (HTTP $HTTP_STATUS)"
+            else
+              echo "❌ Failed to update $FILENAME (HTTP $HTTP_STATUS)"
+              cat /tmp/response.json
+              exit 1
+            fi
+          done <<< "${{ steps.changed.outputs.files }}"
+
+      - name: No workflow changes detected
+        if: steps.changed.outputs.files == ''
+        run: echo "ℹ️  No workflow files changed, nothing to deploy."
