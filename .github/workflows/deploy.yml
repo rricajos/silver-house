@@ -9,6 +9,11 @@ on:
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
+# Prevent concurrent deploys — never cancel in progress, queue instead
+concurrency:
+  group: n8n-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -17,7 +22,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0  # full history needed for reliable before/after diff
 
       - name: Detect changed workflow files
         id: changed
@@ -26,7 +31,14 @@ jobs:
             # Manual trigger: deploy all workflows listed in mapping.json
             CHANGED=$(jq -r 'keys[]' workflows/mapping.json | sed 's|^|workflows/|')
           else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'workflows/*.json' | grep -v 'workflows/mapping.json' || true)
+            BEFORE="${{ github.event.before }}"
+            AFTER="${{ github.event.after }}"
+            # First push to branch has before = 0000...0000, diff against empty tree
+            if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              CHANGED=$(git diff --name-only 4b825dc642cb6eb9a060e54bf8d69288fbee4904 "$AFTER" -- 'workflows/*.json' | grep -v 'workflows/mapping.json' || true)
+            else
+              CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" -- 'workflows/*.json' | grep -v 'workflows/mapping.json' || true)
+            fi
           fi
           echo "files<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGED" >> $GITHUB_OUTPUT
@@ -39,6 +51,7 @@ jobs:
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
         run: |
           MAPPING=$(cat workflows/mapping.json)
+          SUMMARY=""
 
           while IFS= read -r FILE; do
             [ -z "$FILE" ] && continue
@@ -48,43 +61,80 @@ jobs:
 
             if [ -z "$WORKFLOW_ID" ]; then
               echo "⚠️  No mapping found for $FILENAME, skipping."
+              SUMMARY="${SUMMARY}| ⚠️ | \`$FILENAME\` | skipped (no mapping) |\n"
               continue
             fi
 
+            # Validate JSON before sending
+            if ! jq empty "$FILE" 2>/dev/null; then
+              echo "❌ Invalid JSON in $FILENAME, aborting."
+              SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | invalid JSON |\n"
+              exit 1
+            fi
+
+            # Read whether the workflow should be active
+            SHOULD_BE_ACTIVE=$(jq -r '.active // true' "$FILE")
+
             echo "📤 Updating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
 
-            # Strip fields not accepted by n8n PUT API — only name, nodes, connections, settings, staticData are allowed
+            # Strip fields not accepted by n8n PUT API
             jq '{name, nodes, connections, settings, staticData}' "$FILE" > /tmp/payload.json
 
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+              --max-time 30 \
               -X PUT "$N8N_URL/api/v1/workflows/$WORKFLOW_ID" \
               -H "X-N8N-API-KEY: $N8N_API_KEY" \
               -H "Content-Type: application/json" \
               -d @/tmp/payload.json)
 
             if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
-              echo "✅ Successfully updated $FILENAME (HTTP $HTTP_STATUS)"
+              echo "✅ Updated $FILENAME (HTTP $HTTP_STATUS)"
             else
               echo "❌ Failed to update $FILENAME (HTTP $HTTP_STATUS)"
               cat /tmp/response.json
+              SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | update failed (HTTP $HTTP_STATUS) |\n"
               exit 1
             fi
 
-            echo "▶️  Activating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
-
-            ACT_STATUS=$(curl -s -o /tmp/activate_response.json -w "%{http_code}" \
-              -X POST "$N8N_URL/api/v1/workflows/$WORKFLOW_ID/activate" \
-              -H "X-N8N-API-KEY: $N8N_API_KEY")
+            # Activate or deactivate based on the 'active' field in the JSON
+            if [ "$SHOULD_BE_ACTIVE" = "true" ]; then
+              echo "▶️  Activating '$FILENAME'..."
+              ACT_STATUS=$(curl -s -o /tmp/act_response.json -w "%{http_code}" \
+                --max-time 30 \
+                -X POST "$N8N_URL/api/v1/workflows/$WORKFLOW_ID/activate" \
+                -H "X-N8N-API-KEY: $N8N_API_KEY")
+              ACT_LABEL="activated"
+            else
+              echo "⏸️  Deactivating '$FILENAME' (active=false in JSON)..."
+              ACT_STATUS=$(curl -s -o /tmp/act_response.json -w "%{http_code}" \
+                --max-time 30 \
+                -X POST "$N8N_URL/api/v1/workflows/$WORKFLOW_ID/deactivate" \
+                -H "X-N8N-API-KEY: $N8N_API_KEY")
+              ACT_LABEL="deactivated"
+            fi
 
             if [ "$ACT_STATUS" -ge 200 ] && [ "$ACT_STATUS" -lt 300 ]; then
-              echo "✅ Workflow '$FILENAME' activated successfully"
+              echo "✅ Workflow '$FILENAME' $ACT_LABEL (HTTP $ACT_STATUS)"
+              SUMMARY="${SUMMARY}| ✅ | \`$FILENAME\` | updated & $ACT_LABEL |\n"
             else
-              echo "❌ Failed to activate $FILENAME (HTTP $ACT_STATUS)"
-              cat /tmp/activate_response.json
+              echo "❌ Failed to $ACT_LABEL $FILENAME (HTTP $ACT_STATUS)"
+              cat /tmp/act_response.json
+              SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | $ACT_LABEL failed (HTTP $ACT_STATUS) |\n"
               exit 1
             fi
+
           done <<< "${{ steps.changed.outputs.files }}"
+
+          # Write job summary
+          echo "## n8n Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Workflow | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          printf "$SUMMARY" >> $GITHUB_STEP_SUMMARY
 
       - name: No workflow changes detected
         if: steps.changed.outputs.files == ''
-        run: echo "ℹ️  No workflow files changed, nothing to deploy."
+        run: |
+          echo "ℹ️  No workflow files changed, nothing to deploy."
+          echo "## n8n Deploy Summary" >> $GITHUB_STEP_SUMMARY
+          echo "No workflow files changed in this push." >> $GITHUB_STEP_SUMMARY
