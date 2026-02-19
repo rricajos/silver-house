@@ -78,22 +78,8 @@ jobs:
             echo "📤 Updating workflow '$FILENAME' (ID: $WORKFLOW_ID)..."
 
             # Strip fields not accepted by n8n PUT API
-            # Filter settings to only known-safe fields to avoid schema validation errors
-            jq '{
-              name,
-              nodes,
-              connections,
-              settings: (.settings // {} | {
-                executionOrder,
-                saveManualExecutions,
-                callerPolicy,
-                errorWorkflow,
-                timezone,
-                saveDataSuccessExecution,
-                saveDataErrorExecution
-              } | with_entries(select(.value != null))),
-              staticData: (.staticData // null)
-            } | if .staticData == null then del(.staticData) else . end' "$FILE" > /tmp/payload.json
+            # Use del() to remove known-bad fields — simpler and more resilient than whitelisting
+            jq 'del(.id,.active,.isArchived,.createdAt,.updatedAt,.tags,.meta,.versionId,.pinData,.description,.settings.maxConcurrency,.settings.availableInMCP) | if .staticData == null then del(.staticData) else . end' "$FILE" > /tmp/payload.json
 
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --max-time 30 \
