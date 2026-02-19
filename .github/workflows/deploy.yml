@@ -66,8 +66,9 @@ jobs:
             fi
 
             # Validate JSON before sending
-            JQ_ERR=$(jq empty "$FILE" 2>&1)
-            if [ $? -ne 0 ]; then
+            # Use if/else to avoid set -eo pipefail killing the script on jq failure
+            if ! jq empty "$FILE" 2>/tmp/jq_err.txt; then
+              JQ_ERR=$(cat /tmp/jq_err.txt)
               echo "❌ Invalid JSON in $FILENAME, aborting."
               echo "jq error: $JQ_ERR"
               echo "## ❌ JSON Validation Error" >> $GITHUB_STEP_SUMMARY
@@ -75,7 +76,7 @@ jobs:
               echo '```' >> $GITHUB_STEP_SUMMARY
               echo "$JQ_ERR" >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
-              echo "**File head (first 500 bytes hex):**" >> $GITHUB_STEP_SUMMARY
+              echo "**File head (first 200 bytes hex):**" >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
               xxd "$FILE" | head -5 >> $GITHUB_STEP_SUMMARY
               echo '```' >> $GITHUB_STEP_SUMMARY
