@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'workflows/**'
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -20,7 +21,12 @@ jobs:
       - name: Detect changed workflow files
         id: changed
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'workflows/*.json' | grep -v 'workflows/mapping.json' || true)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual trigger: deploy all workflows listed in mapping.json
+            CHANGED=$(jq -r 'keys[]' workflows/mapping.json | sed 's|^|workflows/|')
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- 'workflows/*.json' | grep -v 'workflows/mapping.json' || true)
+          fi
           echo "files<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
