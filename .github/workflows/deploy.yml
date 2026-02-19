@@ -50,6 +50,11 @@ jobs:
           N8N_URL: ${{ secrets.N8N_URL }}
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
         run: |
+          # Redirect stderr to trace file; on any error, dump trace to step summary
+          exec 2>/tmp/bash_trace.txt
+          trap 'echo "## Bash trace (ERR)" >> $GITHUB_STEP_SUMMARY; echo '"'"'```'"'"' >> $GITHUB_STEP_SUMMARY; cat /tmp/bash_trace.txt >> $GITHUB_STEP_SUMMARY; echo '"'"'```'"'"' >> $GITHUB_STEP_SUMMARY' ERR
+          set -x
+
           MAPPING=$(cat workflows/mapping.json)
           SUMMARY=""
 
