@@ -137,10 +137,13 @@ jobs:
               echo "✅ Workflow '$FILENAME' $ACT_LABEL (HTTP $ACT_STATUS)"
               SUMMARY="${SUMMARY}| ✅ | \`$FILENAME\` | updated & $ACT_LABEL |\n"
             else
-              echo "❌ Failed to $ACT_LABEL $FILENAME (HTTP $ACT_STATUS)"
-              cat /tmp/act_response.json
-              SUMMARY="${SUMMARY}| ❌ | \`$FILENAME\` | $ACT_LABEL failed (HTTP $ACT_STATUS) |\n"
-              exit 1
+              # Activation failures are warnings — workflow IS updated, just not (re)activated.
+              # Common cause: sub-workflow placeholder not configured (CONFIGURAR_WF2_WORKFLOW_ID).
+              ACT_MSG=$(cat /tmp/act_response.json)
+              echo "::warning::ACT_FAIL HTTP=$ACT_STATUS msg=$ACT_MSG"
+              echo "⚠️  Could not $ACT_LABEL '$FILENAME' (HTTP $ACT_STATUS) — activate manually in n8n UI"
+              echo "$ACT_MSG"
+              SUMMARY="${SUMMARY}| ⚠️ | \`$FILENAME\` | updated (manual $ACT_LABEL needed) |\n"
             fi
 
           done <<< "${{ steps.changed.outputs.files }}"
