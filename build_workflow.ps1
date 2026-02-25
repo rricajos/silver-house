@@ -6,9 +6,9 @@ $ErrorActionPreference = 'Stop'
 # --- JavaScript code for Code nodes (single-quoted here-strings to avoid PS expansion) ---
 
 $jsResolve = @'
-const driveData = $('1. Listar Drive').first().json;
+const drivePages = $('1. Listar Drive').all();
+const allFiles = drivePages.flatMap(p => p.json.files || []);
 const sheetsData = $input.first().json;
-const allFiles = driveData.files || [];
 const rows = sheetsData.values || [];
 const headers = rows[0] || [];
 
@@ -396,7 +396,7 @@ $node_listDrive = [ordered]@{
                 },
                 [ordered]@{
                     name = 'fields'
-                    value = 'files(id,name,mimeType,parents)'
+                    value = 'nextPageToken,files(id,name,mimeType,parents)'
                 },
                 [ordered]@{
                     name = 'pageSize'
@@ -404,7 +404,23 @@ $node_listDrive = [ordered]@{
                 }
             )
         }
-        options = @{}
+        options = [ordered]@{
+            pagination = [ordered]@{
+                paginationMode = 'updateAParameterInEachRequest'
+                parameters = [ordered]@{
+                    parameters = @(
+                        [ordered]@{
+                            type      = 'queryString'
+                            name      = 'pageToken'
+                            value     = '={{ $response.body.nextPageToken }}'
+                        }
+                    )
+                }
+                paginationCompleteWhen = 'other'
+                completeExpression     = '={{ !$response.body.nextPageToken }}'
+                limitPagesFetched      = $false
+            }
+        }
     }
     name = '1. Listar Drive'
     type = 'n8n-nodes-base.httpRequest'
