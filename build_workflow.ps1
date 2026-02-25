@@ -193,6 +193,68 @@ $node_webhook = [ordered]@{
     webhookId = 'demo-lacasa-webhook'
 }
 
+# Utility: IF node to check if webhook has action=update_cell
+$node_checkAction = [ordered]@{
+    parameters = @{
+        conditions = [ordered]@{
+            options = [ordered]@{
+                caseSensitive = $true
+                leftValue = ''
+                typeValidation = 'strict'
+            }
+            conditions = @(
+                [ordered]@{
+                    id = 'cond_action'
+                    leftValue = '={{ $json.body.action }}'
+                    rightValue = 'update_cell'
+                    operator = [ordered]@{
+                        type = 'string'
+                        operation = 'equals'
+                    }
+                }
+            )
+            combinator = 'and'
+        }
+    }
+    name = '0. Accion?'
+    type = 'n8n-nodes-base.if'
+    typeVersion = 2
+    position = @(480, 500)
+}
+
+# Utility: HTTP Request to update a Sheets cell
+$utilUpdateUrlExpr = @'
+=https://sheets.googleapis.com/v4/spreadsheets/1uA-gJv8JUimuo23stgf5VSxaa7y6mcYwdZCShYhLNz4/values/{{ $json.body.range }}?valueInputOption=USER_ENTERED
+'@
+
+$utilUpdateBodyExpr = @'
+={{ JSON.stringify({ values: [[$json.body.value]] }) }}
+'@
+
+$node_utilUpdate = [ordered]@{
+    parameters = [ordered]@{
+        method = 'PUT'
+        url = $utilUpdateUrlExpr.Trim()
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleSheetsOAuth2Api'
+        sendBody = $true
+        contentType = 'raw'
+        rawContentType = 'application/json'
+        body = $utilUpdateBodyExpr.Trim()
+        options = @{}
+    }
+    name = '0a. Actualizar Celda'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(700, 600)
+    credentials = [ordered]@{
+        googleSheetsOAuth2Api = [ordered]@{
+            id = 'rFPPDXPxZCeuB9QJ'
+            name = 'Google Sheets account'
+        }
+    }
+}
+
 # Node 1: Listar Drive — HTTP Request (replaces Google Drive node)
 $node_listDrive = [ordered]@{
     parameters = [ordered]@{
@@ -463,6 +525,8 @@ $workflow = [ordered]@{
     nodes = @(
         $node_manual,
         $node_webhook,
+        $node_checkAction,
+        $node_utilUpdate,
         $node_listDrive,
         $node_sheets,
         $node_resolve,
@@ -481,7 +545,13 @@ $workflow = [ordered]@{
             main = @(,@([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 }))
         }
         'Webhook Test' = [ordered]@{
-            main = @(,@([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 }))
+            main = @(,@([ordered]@{ node = '0. Accion?'; type = 'main'; index = 0 }))
+        }
+        '0. Accion?' = [ordered]@{
+            main = @(
+                @([ordered]@{ node = '0a. Actualizar Celda'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
+            )
         }
         '1. Listar Drive' = [ordered]@{
             main = @(,@([ordered]@{ node = '2. Leer Sheets'; type = 'main'; index = 0 }))
