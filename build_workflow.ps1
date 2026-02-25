@@ -179,6 +179,23 @@ $node_manual = [ordered]@{
     position = @(250, 300)
 }
 
+$node_cron = [ordered]@{
+    parameters = [ordered]@{
+        rule = [ordered]@{
+            interval = @(
+                [ordered]@{
+                    field = 'minutes'
+                    minutesInterval = 5
+                }
+            )
+        }
+    }
+    name = 'Cron 5min'
+    type = 'n8n-nodes-base.scheduleTrigger'
+    typeVersion = 1.2
+    position = @(250, 100)
+}
+
 $node_webhook = [ordered]@{
     parameters = [ordered]@{
         path = 'demo-lacasa'
@@ -193,32 +210,66 @@ $node_webhook = [ordered]@{
     webhookId = 'demo-lacasa-webhook'
 }
 
-# Utility: IF node to check if webhook has action=update_cell
+# Utility: Switch node to route by action
 $node_checkAction = [ordered]@{
-    parameters = @{
-        conditions = [ordered]@{
-            options = [ordered]@{
-                caseSensitive = $true
-                leftValue = ''
-                typeValidation = 'strict'
-            }
-            conditions = @(
+    parameters = [ordered]@{
+        rules = [ordered]@{
+            values = @(
                 [ordered]@{
-                    id = 'cond_action'
-                    leftValue = '={{ $json.body.action }}'
-                    rightValue = 'update_cell'
-                    operator = [ordered]@{
-                        type = 'string'
-                        operation = 'equals'
+                    conditions = [ordered]@{
+                        options = [ordered]@{
+                            caseSensitive = $true
+                            leftValue = ''
+                            typeValidation = 'strict'
+                        }
+                        conditions = @(
+                            [ordered]@{
+                                id = 'cond_update'
+                                leftValue = '={{ $json.body.action }}'
+                                rightValue = 'update_cell'
+                                operator = [ordered]@{
+                                    type = 'string'
+                                    operation = 'equals'
+                                }
+                            }
+                        )
+                        combinator = 'and'
                     }
+                    renameOutput = $true
+                    outputKey = 'update_cell'
+                },
+                [ordered]@{
+                    conditions = [ordered]@{
+                        options = [ordered]@{
+                            caseSensitive = $true
+                            leftValue = ''
+                            typeValidation = 'strict'
+                        }
+                        conditions = @(
+                            [ordered]@{
+                                id = 'cond_delete'
+                                leftValue = '={{ $json.body.action }}'
+                                rightValue = 'delete_rows'
+                                operator = [ordered]@{
+                                    type = 'string'
+                                    operation = 'equals'
+                                }
+                            }
+                        )
+                        combinator = 'and'
+                    }
+                    renameOutput = $true
+                    outputKey = 'delete_rows'
                 }
             )
-            combinator = 'and'
+        }
+        options = [ordered]@{
+            fallbackOutput = 'extra'
         }
     }
     name = '0. Accion?'
-    type = 'n8n-nodes-base.if'
-    typeVersion = 2
+    type = 'n8n-nodes-base.switch'
+    typeVersion = 3
     position = @(480, 500)
 }
 
@@ -246,7 +297,58 @@ $node_utilUpdate = [ordered]@{
     name = '0a. Actualizar Celda'
     type = 'n8n-nodes-base.httpRequest'
     typeVersion = 4.2
-    position = @(700, 600)
+    position = @(700, 500)
+    credentials = [ordered]@{
+        googleSheetsOAuth2Api = [ordered]@{
+            id = 'rFPPDXPxZCeuB9QJ'
+            name = 'Google Sheets account'
+        }
+    }
+}
+
+# Utility: Delete rows via Sheets batchUpdate API
+# Expects body.rows = [rowNum1, rowNum2, ...] (1-indexed, will be converted to 0-indexed)
+$jsDeleteRows = @'
+const rows = $json.body.rows || [];
+const sorted = rows.map(r => r - 1).sort((a, b) => b - a);
+const requests = sorted.map(idx => ({
+  deleteDimension: {
+    range: { sheetId: 0, dimension: 'ROWS', startIndex: idx, endIndex: idx + 1 }
+  }
+}));
+return [{ json: { deleteBody: { requests } } }];
+'@
+
+$node_buildDelete = [ordered]@{
+    parameters = @{
+        jsCode = $jsDeleteRows
+    }
+    name = '0b. Preparar Delete'
+    type = 'n8n-nodes-base.code'
+    typeVersion = 2
+    position = @(700, 700)
+}
+
+$deleteBodyExpr = @'
+={{ JSON.stringify($json.deleteBody) }}
+'@
+
+$node_utilDelete = [ordered]@{
+    parameters = [ordered]@{
+        method = 'POST'
+        url = 'https://sheets.googleapis.com/v4/spreadsheets/1uA-gJv8JUimuo23stgf5VSxaa7y6mcYwdZCShYhLNz4:batchUpdate'
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleSheetsOAuth2Api'
+        sendBody = $true
+        contentType = 'raw'
+        rawContentType = 'application/json'
+        body = $deleteBodyExpr.Trim()
+        options = @{}
+    }
+    name = '0c. Borrar Filas'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(920, 700)
     credentials = [ordered]@{
         googleSheetsOAuth2Api = [ordered]@{
             id = 'rFPPDXPxZCeuB9QJ'
@@ -524,9 +626,12 @@ $workflow = [ordered]@{
     name = 'Demo Google Drive - lacasademo'
     nodes = @(
         $node_manual,
+        $node_cron,
         $node_webhook,
         $node_checkAction,
         $node_utilUpdate,
+        $node_buildDelete,
+        $node_utilDelete,
         $node_listDrive,
         $node_sheets,
         $node_resolve,
@@ -544,14 +649,21 @@ $workflow = [ordered]@{
         'Ejecutar Manual' = [ordered]@{
             main = @(,@([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 }))
         }
+        'Cron 5min' = [ordered]@{
+            main = @(,@([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 }))
+        }
         'Webhook Test' = [ordered]@{
             main = @(,@([ordered]@{ node = '0. Accion?'; type = 'main'; index = 0 }))
         }
         '0. Accion?' = [ordered]@{
             main = @(
                 @([ordered]@{ node = '0a. Actualizar Celda'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0b. Preparar Delete'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
             )
+        }
+        '0b. Preparar Delete' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0c. Borrar Filas'; type = 'main'; index = 0 }))
         }
         '1. Listar Drive' = [ordered]@{
             main = @(,@([ordered]@{ node = '2. Leer Sheets'; type = 'main'; index = 0 }))
