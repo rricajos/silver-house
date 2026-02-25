@@ -98,7 +98,7 @@ function normalizePhone(phone) {
   return digits;
 }
 
-const phoneIdx = headers.indexOf('TELÉFONO');
+const phoneIdx = headers.findIndex(h => /TEL.?FONO/i.test(h));
 const existingPhones = new Set();
 if (phoneIdx >= 0) {
   for (let i = 1; i < rows.length; i++) {
