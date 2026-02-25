@@ -41,7 +41,7 @@ for (let i = 1; i < rows.length; i++) {
   const fileName = (row[COL_Y] || '').trim();
 
   if (!fileId) continue;
-  if (accion !== 'insert') continue;
+  if (accion.startsWith('moved:') || accion === 'cleanup') continue;
 
   const targetFolder = getTargetFolder(situacion);
   if (!targetFolder) continue;
@@ -491,6 +491,7 @@ $node_sendWa = [ordered]@{
     type = 'n8n-nodes-base.httpRequest'
     typeVersion = 4.2
     position = @(3120, 100)
+    disabled = $true
     onError = 'continueRegularOutput'
     retryOnFail = $true
     maxTries = 2

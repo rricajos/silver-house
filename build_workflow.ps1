@@ -53,6 +53,7 @@ if (fileIdIdx >= 0) {
   }
 }
 
+const STATUS_FOLDERS = ['CITADOS','DESCARTADOS','SELECCIONADOS'];
 const newPdfs = [];
 for (const pdf of pdfs) {
   const parentId = (pdf.parents || [])[0];
@@ -60,6 +61,7 @@ for (const pdf of pdfs) {
   if (existingFileIds.has(pdf.id)) continue;
 
   const pathParts = getPath(parentId);
+  if (pathParts.some(p => STATUS_FOLDERS.includes(p.toUpperCase()))) continue;
   const ctx = pathParts.slice(1);
 
   newPdfs.push({
@@ -90,7 +92,8 @@ $jsProcess = @'
 const items = $input.all();
 const sheetsData = $('2. Leer Sheets').first().json;
 const rows = sheetsData.values || [];
-const headers = rows[0] || [];
+const rawHeaders = rows[0] || [];
+const headers = rawHeaders.map(h => (h || '').trim());
 
 function normalizePhone(phone) {
   const digits = (phone || '').replace(/\D/g, '');
@@ -138,6 +141,15 @@ for (let i = 0; i < items.length; i++) {
   const mes = meta.month ? meta.month.replace(/^\d+\.\s*/, '').toUpperCase() : months[new Date().getMonth()];
   const fecha = new Date().toISOString().split('T')[0];
 
+  const oficina = meta.city || '';
+  const posicion = meta.position || '';
+  const accion = meta.position ? 'organized' : 'insert';
+
+  const expParts = [];
+  if (parsed.experiencia) expParts.push(parsed.experiencia);
+  if (parsed.comentarios) expParts.push(parsed.comentarios);
+  const comentarios = expParts.join(' | ') || '';
+
   results.push({
     json: {
       isDuplicate: false,
@@ -146,7 +158,7 @@ for (let i = 0; i < items.length; i++) {
           mes,
           parsed.nombre || '',
           '',
-          meta.city || '',
+          oficina,
           parsed.residencia || '',
           fecha,
           '',
@@ -154,11 +166,11 @@ for (let i = 0; i < items.length; i++) {
           parsed.telefono || '',
           'Google Drive (auto)',
           '', '', '', '', '', '',
-          parsed.comentarios || '',
+          comentarios,
           'Nuevo',
-          parsed.posicion || meta.position || '',
+          posicion,
           '', '', '',
-          'insert',
+          accion,
           meta.fileId || '',
           meta.fileName || '',
           new Date().toISOString()
@@ -166,6 +178,7 @@ for (let i = 0; i < items.length; i++) {
       },
       fileName: meta.fileName || '',
       nombre: parsed.nombre || '',
+      perfil: parsed.perfil || '',
       status: 'inserted'
     }
   });
@@ -568,7 +581,7 @@ $node_upload = [ordered]@{
 }
 
 $aiBodyExpr = @'
-={{ JSON.stringify({ model: 'gpt-4o-mini', input: [{ role: 'user', content: [{ type: 'input_file', file_id: $json.id }, { type: 'input_text', text: 'Analiza este CV y extrae la info en JSON estricto: {"nombre":"Nombre completo","correo":"Email","telefono":"Telefono","residencia":"Ciudad","posicion":"Puesto o experiencia principal","comentarios":"Resumen breve max 50 palabras"}. Si no encuentras un dato usa "". Responde SOLO el JSON sin markdown.' }] }], text: { format: { type: 'json_object' } }, temperature: 0.1, max_output_tokens: 500 }) }}
+={{ JSON.stringify({ model: 'gpt-4o-mini', input: [{ role: 'user', content: [{ type: 'input_file', file_id: $json.id }, { type: 'input_text', text: 'Analiza este CV y extrae la info en JSON estricto: {"nombre":"Nombre completo","correo":"Email","telefono":"Telefono con prefijo si aparece","residencia":"Ciudad de residencia","perfil":"Tipo de puesto profesional en MAYUSCULAS (ej: ASESOR COMERCIAL, ADMINISTRATIVO, COMERCIAL)","experiencia":"Ultimo puesto de trabajo","comentarios":"Resumen profesional breve, max 50 palabras"}. Si no encuentras un dato usa "". Responde SOLO el JSON sin markdown.' }] }], text: { format: { type: 'json_object' } }, temperature: 0.1, max_output_tokens: 500 }) }}
 '@
 
 $node_openai = [ordered]@{
@@ -680,6 +693,271 @@ $node_noNew = [ordered]@{
     position = @(1360, 450)
 }
 
+# --- File organization nodes (auto-move to date/position folder) ---
+
+$jsPlanDestino = @'
+const drivePages = $('1. Listar Drive').all();
+const allFiles = drivePages.flatMap(p => p.json.files || []);
+const ROOT_FOLDER = '18gdeXN_QaFNQf-tktV2F0a0G-z6XKo92';
+
+const folders = {};
+for (const f of allFiles) {
+  if (f.mimeType === 'application/vnd.google-apps.folder') {
+    folders[f.id] = { name: f.name, parentId: (f.parents || [])[0] };
+  }
+}
+
+function findFolder(name, parentId) {
+  for (const [id, f] of Object.entries(folders)) {
+    if (f.name === name && f.parentId === parentId) return id;
+  }
+  return null;
+}
+
+const MONTHS = ['ENERO','FEBRERO','MARZO','ABRIL','MAYO','JUNIO','JULIO','AGOSTO','SEPTIEMBRE','OCTUBRE','NOVIEMBRE','DICIEMBRE'];
+const now = new Date();
+const year = String(now.getFullYear());
+const mes = (now.getMonth() + 1) + '. ' + MONTHS[now.getMonth()];
+const BASE = 'https://www.googleapis.com/drive/v3/files';
+
+const meta = $('4. Hay Nuevos?').item.json;
+const proc = $('8. Procesar y Deduplicar').item.json;
+
+const insertResp = $input.item.json;
+const range = insertResp.updates?.updatedRange || '';
+const rowMatch = range.match(/(\d+)$/);
+const rowNumber = rowMatch ? parseInt(rowMatch[1]) : 0;
+
+if (meta.position || meta.parentId !== ROOT_FOLDER) {
+  return [{ json: { needsOrganize: false, fileId: meta.fileId, rowNumber } }];
+}
+
+const perfil = (proc.perfil || '').trim().toUpperCase();
+const posicion = perfil || 'POSICION DESCONOCIDA';
+
+const l1Id = findFolder(year, ROOT_FOLDER);
+const l2Id = l1Id ? findFolder(posicion, l1Id) : null;
+const l3Id = l2Id ? findFolder(mes, l2Id) : null;
+
+return [{ json: {
+  needsOrganize: true,
+  fileId: meta.fileId,
+  fileName: meta.fileName,
+  currentParentId: meta.parentId,
+  rowNumber,
+  posicion,
+  l1_method: l1Id ? 'GET' : 'POST',
+  l1_url: l1Id ? BASE + '/' + l1Id + '?fields=id,name' : BASE + '?fields=id,name',
+  l1_name: year,
+  l1_parentId: ROOT_FOLDER,
+  l2_method: l2Id ? 'GET' : 'POST',
+  l2_url: l2Id ? BASE + '/' + l2Id + '?fields=id,name' : BASE + '?fields=id,name',
+  l2_name: posicion,
+  l3_method: l3Id ? 'GET' : 'POST',
+  l3_url: l3Id ? BASE + '/' + l3Id + '?fields=id,name' : BASE + '?fields=id,name',
+  l3_name: mes
+} }];
+'@
+
+$node_planDestino = [ordered]@{
+    parameters = @{
+        jsCode = $jsPlanDestino
+    }
+    name = '13. Planificar Destino'
+    type = 'n8n-nodes-base.code'
+    typeVersion = 2
+    position = @(2680, 100)
+}
+
+$node_ifOrganize = [ordered]@{
+    parameters = @{
+        conditions = [ordered]@{
+            options = [ordered]@{
+                caseSensitive = $true
+                leftValue = ''
+                typeValidation = 'strict'
+            }
+            conditions = @(
+                [ordered]@{
+                    id = 'cond_organize'
+                    leftValue = '={{ $json.needsOrganize }}'
+                    rightValue = $true
+                    operator = [ordered]@{
+                        type = 'boolean'
+                        operation = 'true'
+                    }
+                }
+            )
+            combinator = 'and'
+        }
+    }
+    name = '14. Organizar?'
+    type = 'n8n-nodes-base.if'
+    typeVersion = 2
+    position = @(2900, 100)
+}
+
+# Level 1: Year folder (GET existing or POST new)
+$l1BodyExpr = @'
+={{ $json.l1_method === "POST" ? JSON.stringify({name: $json.l1_name, mimeType: "application/vnd.google-apps.folder", parents: [$json.l1_parentId]}) : "{}" }}
+'@
+
+$node_level1 = [ordered]@{
+    parameters = [ordered]@{
+        method = '={{ $json.l1_method }}'
+        url = '={{ $json.l1_url }}'
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleDriveOAuth2Api'
+        sendBody = $true
+        contentType = 'raw'
+        rawContentType = 'application/json'
+        body = $l1BodyExpr.Trim()
+        options = @{}
+    }
+    name = '15. Nivel Ano'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(3120, 0)
+    credentials = [ordered]@{
+        googleDriveOAuth2Api = [ordered]@{
+            id = 'wW0N2uPI0lkwY2p7'
+            name = 'Google Drive account'
+        }
+    }
+}
+
+# Level 2: Position folder
+$l2UrlExpr = @'
+={{ $('13. Planificar Destino').item.json.l2_url }}
+'@
+
+$l2BodyExpr = @'
+={{ $('13. Planificar Destino').item.json.l2_method === "POST" ? JSON.stringify({name: $('13. Planificar Destino').item.json.l2_name, mimeType: "application/vnd.google-apps.folder", parents: [$('15. Nivel Ano').item.json.id]}) : "{}" }}
+'@
+
+$node_level2 = [ordered]@{
+    parameters = [ordered]@{
+        method = '={{ $("13. Planificar Destino").item.json.l2_method }}'
+        url = $l2UrlExpr.Trim()
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleDriveOAuth2Api'
+        sendBody = $true
+        contentType = 'raw'
+        rawContentType = 'application/json'
+        body = $l2BodyExpr.Trim()
+        options = @{}
+    }
+    name = '16. Nivel Posicion'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(3340, 0)
+    credentials = [ordered]@{
+        googleDriveOAuth2Api = [ordered]@{
+            id = 'wW0N2uPI0lkwY2p7'
+            name = 'Google Drive account'
+        }
+    }
+}
+
+# Level 3: Month folder
+$l3UrlExpr = @'
+={{ $('13. Planificar Destino').item.json.l3_url }}
+'@
+
+$l3BodyExpr = @'
+={{ $('13. Planificar Destino').item.json.l3_method === "POST" ? JSON.stringify({name: $('13. Planificar Destino').item.json.l3_name, mimeType: "application/vnd.google-apps.folder", parents: [$('16. Nivel Posicion').item.json.id]}) : "{}" }}
+'@
+
+$node_level3 = [ordered]@{
+    parameters = [ordered]@{
+        method = '={{ $("13. Planificar Destino").item.json.l3_method }}'
+        url = $l3UrlExpr.Trim()
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleDriveOAuth2Api'
+        sendBody = $true
+        contentType = 'raw'
+        rawContentType = 'application/json'
+        body = $l3BodyExpr.Trim()
+        options = @{}
+    }
+    name = '17. Nivel Mes'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(3560, 0)
+    credentials = [ordered]@{
+        googleDriveOAuth2Api = [ordered]@{
+            id = 'wW0N2uPI0lkwY2p7'
+            name = 'Google Drive account'
+        }
+    }
+}
+
+# Move file to target folder
+$moveTargetUrlExpr = @'
+=https://www.googleapis.com/drive/v3/files/{{ $('13. Planificar Destino').item.json.fileId }}?addParents={{ $('17. Nivel Mes').item.json.id }}&removeParents={{ $('13. Planificar Destino').item.json.currentParentId }}
+'@
+
+$node_moveToTarget = [ordered]@{
+    parameters = [ordered]@{
+        method = 'PATCH'
+        url = $moveTargetUrlExpr.Trim()
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleDriveOAuth2Api'
+        options = @{}
+    }
+    name = '18. Mover a Destino'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(3780, 0)
+    credentials = [ordered]@{
+        googleDriveOAuth2Api = [ordered]@{
+            id = 'wW0N2uPI0lkwY2p7'
+            name = 'Google Drive account'
+        }
+    }
+}
+
+# Update _accion to 'organized' in Sheets
+$markOrgUrlExpr = @'
+=https://sheets.googleapis.com/v4/spreadsheets/1uA-gJv8JUimuo23stgf5VSxaa7y6mcYwdZCShYhLNz4/values/W{{ $('13. Planificar Destino').item.json.rowNumber }}:Z{{ $('13. Planificar Destino').item.json.rowNumber }}?valueInputOption=USER_ENTERED
+'@
+
+$markOrgBodyExpr = @'
+={{ JSON.stringify({ values: [['organized', $('13. Planificar Destino').item.json.fileId, $('13. Planificar Destino').item.json.fileName, new Date().toISOString()]] }) }}
+'@
+
+$node_markOrganized = [ordered]@{
+    parameters = [ordered]@{
+        method = 'PUT'
+        url = $markOrgUrlExpr.Trim()
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleSheetsOAuth2Api'
+        sendBody = $true
+        contentType = 'raw'
+        rawContentType = 'application/json'
+        body = $markOrgBodyExpr.Trim()
+        options = @{}
+    }
+    name = '19. Marcar Organizado'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(4000, 0)
+    credentials = [ordered]@{
+        googleSheetsOAuth2Api = [ordered]@{
+            id = 'rFPPDXPxZCeuB9QJ'
+            name = 'Google Sheets account'
+        }
+    }
+}
+
+$node_alreadyOrganized = [ordered]@{
+    parameters = @{}
+    name = '20. Ya Organizado'
+    type = 'n8n-nodes-base.noOp'
+    typeVersion = 1
+    position = @(3120, 200)
+}
+
 # --- Build workflow ---
 $workflow = [ordered]@{
     name = 'Demo Google Drive - lacasademo'
@@ -703,7 +981,15 @@ $workflow = [ordered]@{
         $node_ifDuplicate,
         $node_insert,
         $node_duplicate,
-        $node_noNew
+        $node_noNew,
+        $node_planDestino,
+        $node_ifOrganize,
+        $node_level1,
+        $node_level2,
+        $node_level3,
+        $node_moveToTarget,
+        $node_markOrganized,
+        $node_alreadyOrganized
     )
     connections = [ordered]@{
         'Ejecutar Manual' = [ordered]@{
@@ -760,6 +1046,30 @@ $workflow = [ordered]@{
                 @([ordered]@{ node = '10. Insertar en Sheets'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '11. Duplicado'; type = 'main'; index = 0 })
             )
+        }
+        '10. Insertar en Sheets' = [ordered]@{
+            main = @(,@([ordered]@{ node = '13. Planificar Destino'; type = 'main'; index = 0 }))
+        }
+        '13. Planificar Destino' = [ordered]@{
+            main = @(,@([ordered]@{ node = '14. Organizar?'; type = 'main'; index = 0 }))
+        }
+        '14. Organizar?' = [ordered]@{
+            main = @(
+                @([ordered]@{ node = '15. Nivel Ano'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '20. Ya Organizado'; type = 'main'; index = 0 })
+            )
+        }
+        '15. Nivel Ano' = [ordered]@{
+            main = @(,@([ordered]@{ node = '16. Nivel Posicion'; type = 'main'; index = 0 }))
+        }
+        '16. Nivel Posicion' = [ordered]@{
+            main = @(,@([ordered]@{ node = '17. Nivel Mes'; type = 'main'; index = 0 }))
+        }
+        '17. Nivel Mes' = [ordered]@{
+            main = @(,@([ordered]@{ node = '18. Mover a Destino'; type = 'main'; index = 0 }))
+        }
+        '18. Mover a Destino' = [ordered]@{
+            main = @(,@([ordered]@{ node = '19. Marcar Organizado'; type = 'main'; index = 0 }))
         }
     }
     settings = @{
