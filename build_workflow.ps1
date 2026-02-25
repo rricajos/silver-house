@@ -306,27 +306,50 @@ $node_utilUpdate = [ordered]@{
     }
 }
 
-# Utility: Delete rows via Sheets batchUpdate API
-# Expects body.rows = [rowNum1, rowNum2, ...] (1-indexed, will be converted to 0-indexed)
+# Utility: Fetch spreadsheet metadata to get sheetId
+$node_fetchMeta = [ordered]@{
+    parameters = [ordered]@{
+        method = 'GET'
+        url = 'https://sheets.googleapis.com/v4/spreadsheets/1uA-gJv8JUimuo23stgf5VSxaa7y6mcYwdZCShYhLNz4?fields=sheets.properties'
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleSheetsOAuth2Api'
+        options = @{}
+    }
+    name = '0b. Metadata Sheet'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(700, 700)
+    credentials = [ordered]@{
+        googleSheetsOAuth2Api = [ordered]@{
+            id = 'rFPPDXPxZCeuB9QJ'
+            name = 'Google Sheets account'
+        }
+    }
+}
+
+# Utility: Build delete requests with real sheetId
 $jsDeleteRows = @'
-const rows = $json.body.rows || [];
+const meta = $json;
+const webhookData = $('0. Accion?').first().json;
+const rows = webhookData.body.rows || [];
+const sheetId = (meta.sheets || [])[0]?.properties?.sheetId || 0;
 const sorted = rows.map(r => r - 1).sort((a, b) => b - a);
 const requests = sorted.map(idx => ({
   deleteDimension: {
-    range: { sheetId: 0, dimension: 'ROWS', startIndex: idx, endIndex: idx + 1 }
+    range: { sheetId, dimension: 'ROWS', startIndex: idx, endIndex: idx + 1 }
   }
 }));
-return [{ json: { deleteBody: { requests } } }];
+return [{ json: { deleteBody: { requests }, sheetId, rowCount: rows.length } }];
 '@
 
 $node_buildDelete = [ordered]@{
     parameters = @{
         jsCode = $jsDeleteRows
     }
-    name = '0b. Preparar Delete'
+    name = '0c. Preparar Delete'
     type = 'n8n-nodes-base.code'
     typeVersion = 2
-    position = @(700, 700)
+    position = @(920, 700)
 }
 
 $deleteBodyExpr = @'
@@ -345,10 +368,10 @@ $node_utilDelete = [ordered]@{
         body = $deleteBodyExpr.Trim()
         options = @{}
     }
-    name = '0c. Borrar Filas'
+    name = '0d. Borrar Filas'
     type = 'n8n-nodes-base.httpRequest'
     typeVersion = 4.2
-    position = @(920, 700)
+    position = @(1140, 700)
     credentials = [ordered]@{
         googleSheetsOAuth2Api = [ordered]@{
             id = 'rFPPDXPxZCeuB9QJ'
@@ -630,6 +653,7 @@ $workflow = [ordered]@{
         $node_webhook,
         $node_checkAction,
         $node_utilUpdate,
+        $node_fetchMeta,
         $node_buildDelete,
         $node_utilDelete,
         $node_listDrive,
@@ -658,12 +682,15 @@ $workflow = [ordered]@{
         '0. Accion?' = [ordered]@{
             main = @(
                 @([ordered]@{ node = '0a. Actualizar Celda'; type = 'main'; index = 0 }),
-                @([ordered]@{ node = '0b. Preparar Delete'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0b. Metadata Sheet'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
             )
         }
-        '0b. Preparar Delete' = [ordered]@{
-            main = @(,@([ordered]@{ node = '0c. Borrar Filas'; type = 'main'; index = 0 }))
+        '0b. Metadata Sheet' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0c. Preparar Delete'; type = 'main'; index = 0 }))
+        }
+        '0c. Preparar Delete' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0d. Borrar Filas'; type = 'main'; index = 0 }))
         }
         '1. Listar Drive' = [ordered]@{
             main = @(,@([ordered]@{ node = '2. Leer Sheets'; type = 'main'; index = 0 }))
