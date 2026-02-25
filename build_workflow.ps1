@@ -114,6 +114,11 @@ for (let i = 0; i < items.length; i++) {
   const item = items[i];
   const meta = metaItems[i]?.json || {};
 
+  if (item.json?.error) {
+    results.push({ json: { isDuplicate: true, skipped: true, error: item.json.error.message || 'upstream error', fileName: meta.fileName } });
+    continue;
+  }
+
   const content = item.json?.output?.[0]?.content?.[0]?.text || '{}';
   let parsed;
   try {
@@ -510,6 +515,10 @@ $node_download = [ordered]@{
     type = 'n8n-nodes-base.httpRequest'
     typeVersion = 4.2
     position = @(1360, 200)
+    onError = 'continueRegularOutput'
+    retryOnFail = $true
+    maxTries = 3
+    waitBetweenTries = 2000
     credentials = [ordered]@{
         googleDriveOAuth2Api = [ordered]@{
             id = 'wW0N2uPI0lkwY2p7'
@@ -546,6 +555,10 @@ $node_upload = [ordered]@{
     type = 'n8n-nodes-base.httpRequest'
     typeVersion = 4.2
     position = @(1580, 200)
+    onError = 'continueRegularOutput'
+    retryOnFail = $true
+    maxTries = 3
+    waitBetweenTries = 2000
     credentials = [ordered]@{
         httpHeaderAuth = [ordered]@{
             id = 'UaTumCTaiqXx8eWi'
@@ -574,6 +587,10 @@ $node_openai = [ordered]@{
     type = 'n8n-nodes-base.httpRequest'
     typeVersion = 4.2
     position = @(1800, 200)
+    onError = 'continueRegularOutput'
+    retryOnFail = $true
+    maxTries = 3
+    waitBetweenTries = 2000
     credentials = [ordered]@{
         httpHeaderAuth = [ordered]@{
             id = 'UaTumCTaiqXx8eWi'
@@ -636,6 +653,9 @@ $node_insert = [ordered]@{
     type = 'n8n-nodes-base.httpRequest'
     typeVersion = 4.2
     position = @(2460, 100)
+    retryOnFail = $true
+    maxTries = 3
+    waitBetweenTries = 2000
     credentials = [ordered]@{
         googleSheetsOAuth2Api = [ordered]@{
             id = 'rFPPDXPxZCeuB9QJ'
