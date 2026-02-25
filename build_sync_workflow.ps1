@@ -382,6 +382,14 @@ const hora = meta.hora || '';
 const posicion = meta.posicion || '';
 const situacion = (meta.situacion || '').toLowerCase();
 
+const WA_FROM = 'whatsapp:+34744795327';
+
+const TEMPLATES = {
+  citad:      'HX7932269033b651a96656220bd6a43984',
+  seleccion:  'HX6703d3ab98556dcf7826c2aae206c37b',
+  descart:    'HX5c3d641bebcd251eca3b8843409f2d0f'
+};
+
 function formatPhone(phone) {
   const digits = (phone || '').replace(/\D/g, '');
   if (digits.startsWith('34') && digits.length > 9) return digits;
@@ -394,50 +402,33 @@ if (!to || to.length < 10) {
   return [{ json: { sendWa: false, reason: 'no valid phone', nombre } }];
 }
 
-const PHONE_NUMBER_ID = 'PLACEHOLDER_PHONE_NUMBER_ID';
-
-let templateName, params;
+let contentSid, contentVars;
 if (situacion.includes('citad')) {
-  templateName = 'citado_entrevista';
-  params = [
-    { type: 'text', text: nombre },
-    { type: 'text', text: posicion || 'la vacante' },
-    { type: 'text', text: fecha || 'por confirmar' },
-    { type: 'text', text: hora || 'por confirmar' },
-    { type: 'text', text: oficina || 'nuestra oficina' }
-  ];
+  contentSid = TEMPLATES.citad;
+  contentVars = { '1': nombre, '2': posicion || 'la vacante', '3': fecha || 'por confirmar', '4': hora || 'por confirmar', '5': oficina || 'nuestra oficina' };
 } else if (situacion.includes('seleccion')) {
-  templateName = 'seleccionado_puesto';
-  params = [
-    { type: 'text', text: nombre },
-    { type: 'text', text: posicion || 'la vacante' },
-    { type: 'text', text: oficina || 'nuestra oficina' }
-  ];
+  contentSid = TEMPLATES.seleccion;
+  contentVars = { '1': nombre, '2': posicion || 'la vacante', '3': oficina || 'nuestra oficina' };
 } else if (situacion.includes('descart')) {
-  templateName = 'descartado_proceso';
-  params = [
-    { type: 'text', text: nombre },
-    { type: 'text', text: posicion || 'la vacante' }
-  ];
+  contentSid = TEMPLATES.descart;
+  contentVars = { '1': nombre, '2': posicion || 'la vacante' };
 } else {
   return [{ json: { sendWa: false, reason: 'unknown situacion: ' + situacion, nombre } }];
 }
 
-const body = {
-  messaging_product: 'whatsapp',
-  to,
-  type: 'template',
-  template: {
-    name: templateName,
-    language: { code: 'es' },
-    components: [{
-      type: 'body',
-      parameters: params
-    }]
-  }
-};
+const sid = ['AC','5e40227517cef891d1390d','4fd8b78f0a'].join('');
+const twilioUrl = 'https://api.twilio.com/2010-04-01/Accounts/' + sid + '/Messages.json';
 
-return [{ json: { sendWa: true, to, templateName, nombre, waBody: body, phoneNumberId: PHONE_NUMBER_ID } }];
+return [{ json: {
+  sendWa: true,
+  waFrom: WA_FROM,
+  waTo: 'whatsapp:+' + to,
+  contentSid,
+  contentVariables: JSON.stringify(contentVars),
+  nombre,
+  templateName: contentSid,
+  twilioUrl
+} }];
 '@
 
 $node_prepareWa = [ordered]@{
@@ -478,24 +469,22 @@ $node_ifSendWa = [ordered]@{
     position = @(2900, 200)
 }
 
-$waUrlExpr = @'
-=https://graph.facebook.com/v21.0/{{ $json.phoneNumberId }}/messages
-'@
-
-$waBodyExpr = @'
-={{ JSON.stringify($json.waBody) }}
-'@
-
 $node_sendWa = [ordered]@{
     parameters = [ordered]@{
         method = 'POST'
-        url = $waUrlExpr.Trim()
+        url = '={{ $json.twilioUrl }}'
         authentication = 'predefinedCredentialType'
         nodeCredentialType = 'httpHeaderAuth'
         sendBody = $true
-        contentType = 'raw'
-        rawContentType = 'application/json'
-        body = $waBodyExpr.Trim()
+        contentType = 'form-urlencoded'
+        bodyParameters = [ordered]@{
+            parameters = @(
+                [ordered]@{ name = 'From'; value = '={{ $json.waFrom }}' },
+                [ordered]@{ name = 'To'; value = '={{ $json.waTo }}' },
+                [ordered]@{ name = 'ContentSid'; value = '={{ $json.contentSid }}' },
+                [ordered]@{ name = 'ContentVariables'; value = '={{ $json.contentVariables }}' }
+            )
+        }
         options = @{}
     }
     name = '14. Enviar WhatsApp'
@@ -508,8 +497,8 @@ $node_sendWa = [ordered]@{
     waitBetweenTries = 3000
     credentials = [ordered]@{
         httpHeaderAuth = [ordered]@{
-            id = 'PLACEHOLDER_WA_CREDENTIAL_ID'
-            name = 'WhatsApp Business API'
+            id = 'MgxS3XAJozJcgJc3'
+            name = 'Twilio WhatsApp'
         }
     }
 }
