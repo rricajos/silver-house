@@ -7,7 +7,13 @@ $ErrorActionPreference = 'Stop'
 
 $jsFilter = @'
 const rows = $input.first().json.values || [];
+const COL_B = 1;
+const COL_D = 3;
+const COL_F = 5;
+const COL_G = 6;
+const COL_I = 8;
 const COL_R = 17;
+const COL_S = 18;
 const COL_W = 22;
 const COL_X = 23;
 const COL_Y = 24;
@@ -47,7 +53,13 @@ for (let i = 1; i < rows.length; i++) {
       situacion,
       targetFolder,
       rowNumber: i + 1,
-      hasPending: true
+      hasPending: true,
+      nombre: (row[COL_B] || '').trim(),
+      oficina: (row[COL_D] || '').trim(),
+      fecha: (row[COL_F] || '').trim(),
+      hora: (row[COL_G] || '').trim(),
+      telefono: (row[COL_I] || '').trim(),
+      posicion: (row[COL_S] || '').trim()
     }
   });
 }
@@ -358,6 +370,158 @@ $node_noChanges = [ordered]@{
     position = @(1140, 450)
 }
 
+# --- WhatsApp messaging nodes ---
+
+$jsWhatsApp = @'
+const meta = $('2. Filtrar Pendientes').item.json;
+const nombre = meta.nombre || 'Candidato/a';
+const telefono = meta.telefono || '';
+const oficina = meta.oficina || '';
+const fecha = meta.fecha || '';
+const hora = meta.hora || '';
+const posicion = meta.posicion || '';
+const situacion = (meta.situacion || '').toLowerCase();
+
+function formatPhone(phone) {
+  const digits = (phone || '').replace(/\D/g, '');
+  if (digits.startsWith('34') && digits.length > 9) return digits;
+  if (digits.length === 9) return '34' + digits;
+  return digits;
+}
+
+const to = formatPhone(telefono);
+if (!to || to.length < 10) {
+  return [{ json: { sendWa: false, reason: 'no valid phone', nombre } }];
+}
+
+const PHONE_NUMBER_ID = 'PLACEHOLDER_PHONE_NUMBER_ID';
+
+let templateName, params;
+if (situacion.includes('citad')) {
+  templateName = 'citado_entrevista';
+  params = [
+    { type: 'text', text: nombre },
+    { type: 'text', text: posicion || 'la vacante' },
+    { type: 'text', text: fecha || 'por confirmar' },
+    { type: 'text', text: hora || 'por confirmar' },
+    { type: 'text', text: oficina || 'nuestra oficina' }
+  ];
+} else if (situacion.includes('seleccion')) {
+  templateName = 'seleccionado_puesto';
+  params = [
+    { type: 'text', text: nombre },
+    { type: 'text', text: posicion || 'la vacante' },
+    { type: 'text', text: oficina || 'nuestra oficina' }
+  ];
+} else if (situacion.includes('descart')) {
+  templateName = 'descartado_proceso';
+  params = [
+    { type: 'text', text: nombre },
+    { type: 'text', text: posicion || 'la vacante' }
+  ];
+} else {
+  return [{ json: { sendWa: false, reason: 'unknown situacion: ' + situacion, nombre } }];
+}
+
+const body = {
+  messaging_product: 'whatsapp',
+  to,
+  type: 'template',
+  template: {
+    name: templateName,
+    language: { code: 'es' },
+    components: [{
+      type: 'body',
+      parameters: params
+    }]
+  }
+};
+
+return [{ json: { sendWa: true, to, templateName, nombre, waBody: body, phoneNumberId: PHONE_NUMBER_ID } }];
+'@
+
+$node_prepareWa = [ordered]@{
+    parameters = @{
+        jsCode = $jsWhatsApp
+    }
+    name = '12. Preparar WhatsApp'
+    type = 'n8n-nodes-base.code'
+    typeVersion = 2
+    position = @(2680, 200)
+}
+
+$node_ifSendWa = [ordered]@{
+    parameters = @{
+        conditions = [ordered]@{
+            options = [ordered]@{
+                caseSensitive = $true
+                leftValue = ''
+                typeValidation = 'strict'
+            }
+            conditions = @(
+                [ordered]@{
+                    id = 'cond_wa'
+                    leftValue = '={{ $json.sendWa }}'
+                    rightValue = $true
+                    operator = [ordered]@{
+                        type = 'boolean'
+                        operation = 'true'
+                    }
+                }
+            )
+            combinator = 'and'
+        }
+    }
+    name = '13. Enviar WA?'
+    type = 'n8n-nodes-base.if'
+    typeVersion = 2
+    position = @(2900, 200)
+}
+
+$waUrlExpr = @'
+=https://graph.facebook.com/v21.0/{{ $json.phoneNumberId }}/messages
+'@
+
+$waBodyExpr = @'
+={{ JSON.stringify($json.waBody) }}
+'@
+
+$node_sendWa = [ordered]@{
+    parameters = [ordered]@{
+        method = 'POST'
+        url = $waUrlExpr.Trim()
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'httpHeaderAuth'
+        sendBody = $true
+        contentType = 'raw'
+        rawContentType = 'application/json'
+        body = $waBodyExpr.Trim()
+        options = @{}
+    }
+    name = '14. Enviar WhatsApp'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(3120, 100)
+    onError = 'continueRegularOutput'
+    retryOnFail = $true
+    maxTries = 2
+    waitBetweenTries = 3000
+    credentials = [ordered]@{
+        httpHeaderAuth = [ordered]@{
+            id = 'PLACEHOLDER_WA_CREDENTIAL_ID'
+            name = 'WhatsApp Business API'
+        }
+    }
+}
+
+$node_waSkipped = [ordered]@{
+    parameters = @{}
+    name = '15. WA No Enviado'
+    type = 'n8n-nodes-base.noOp'
+    typeVersion = 1
+    position = @(3120, 350)
+}
+
 # --- Build workflow ---
 $workflow = [ordered]@{
     name = 'Demo Google Drive Sync - lacasademo'
@@ -374,7 +538,11 @@ $workflow = [ordered]@{
         $node_createFolder,
         $node_moveFile,
         $node_updateSheets,
-        $node_noChanges
+        $node_noChanges,
+        $node_prepareWa,
+        $node_ifSendWa,
+        $node_sendWa,
+        $node_waSkipped
     )
     connections = [ordered]@{
         'Cron Sync 1min' = [ordered]@{
@@ -415,6 +583,18 @@ $workflow = [ordered]@{
         }
         '9. Mover Archivo' = [ordered]@{
             main = @(,@([ordered]@{ node = '10. Actualizar Sheets'; type = 'main'; index = 0 }))
+        }
+        '10. Actualizar Sheets' = [ordered]@{
+            main = @(,@([ordered]@{ node = '12. Preparar WhatsApp'; type = 'main'; index = 0 }))
+        }
+        '12. Preparar WhatsApp' = [ordered]@{
+            main = @(,@([ordered]@{ node = '13. Enviar WA?'; type = 'main'; index = 0 }))
+        }
+        '13. Enviar WA?' = [ordered]@{
+            main = @(
+                @([ordered]@{ node = '14. Enviar WhatsApp'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '15. WA No Enviado'; type = 'main'; index = 0 })
+            )
         }
     }
     settings = @{
