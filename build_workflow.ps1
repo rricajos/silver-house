@@ -278,6 +278,29 @@ $node_checkAction = [ordered]@{
                     }
                     renameOutput = $true
                     outputKey = 'delete_rows'
+                },
+                [ordered]@{
+                    conditions = [ordered]@{
+                        options = [ordered]@{
+                            caseSensitive = $true
+                            leftValue = ''
+                            typeValidation = 'strict'
+                        }
+                        conditions = @(
+                            [ordered]@{
+                                id = 'cond_read'
+                                leftValue = '={{ $json.body.action }}'
+                                rightValue = 'read_sheet'
+                                operator = [ordered]@{
+                                    type = 'string'
+                                    operation = 'equals'
+                                }
+                            }
+                        )
+                        combinator = 'and'
+                    }
+                    renameOutput = $true
+                    outputKey = 'read_sheet'
                 }
             )
         }
@@ -390,6 +413,27 @@ $node_utilDelete = [ordered]@{
     type = 'n8n-nodes-base.httpRequest'
     typeVersion = 4.2
     position = @(1140, 700)
+    credentials = [ordered]@{
+        googleSheetsOAuth2Api = [ordered]@{
+            id = 'rFPPDXPxZCeuB9QJ'
+            name = 'Google Sheets account'
+        }
+    }
+}
+
+# Utility: Read entire sheet (for dashboard panel)
+$node_utilRead = [ordered]@{
+    parameters = [ordered]@{
+        method = 'GET'
+        url = 'https://sheets.googleapis.com/v4/spreadsheets/1uA-gJv8JUimuo23stgf5VSxaa7y6mcYwdZCShYhLNz4/values/A:Z'
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleSheetsOAuth2Api'
+        options = @{}
+    }
+    name = '0e. Leer Todo'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(700, 900)
     credentials = [ordered]@{
         googleSheetsOAuth2Api = [ordered]@{
             id = 'rFPPDXPxZCeuB9QJ'
@@ -970,6 +1014,7 @@ $workflow = [ordered]@{
         $node_fetchMeta,
         $node_buildDelete,
         $node_utilDelete,
+        $node_utilRead,
         $node_listDrive,
         $node_sheets,
         $node_resolve,
@@ -1005,6 +1050,7 @@ $workflow = [ordered]@{
             main = @(
                 @([ordered]@{ node = '0a. Actualizar Celda'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0b. Metadata Sheet'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0e. Leer Todo'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
             )
         }
