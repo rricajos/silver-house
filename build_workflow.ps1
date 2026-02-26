@@ -390,6 +390,29 @@ $node_checkAction = [ordered]@{
                     }
                     renameOutput = $true
                     outputKey = 'share_drive'
+                },
+                [ordered]@{
+                    conditions = [ordered]@{
+                        options = [ordered]@{
+                            caseSensitive = $true
+                            leftValue = ''
+                            typeValidation = 'strict'
+                        }
+                        conditions = @(
+                            [ordered]@{
+                                id = 'cond_sendemail'
+                                leftValue = '={{ $json.body.action }}'
+                                rightValue = 'send_email'
+                                operator = [ordered]@{
+                                    type = 'string'
+                                    operation = 'equals'
+                                }
+                            }
+                        )
+                        combinator = 'and'
+                    }
+                    renameOutput = $true
+                    outputKey = 'send_email'
                 }
             )
         }
@@ -648,6 +671,89 @@ $node_execShare = [ordered]@{
             name = 'Google Drive account'
         }
     }
+}
+
+# Utility: Prepare email params from webhook body
+$jsPrepareEmail = @'
+const body = $json.body || {};
+const to = (body.to || '').trim();
+const subject = body.subject || 'Notificacion - La Casa RRHH';
+const html = body.html || body.text || '';
+if (!to) return [{ json: { ok: false, error: 'Falta destinatario (to)' } }];
+return [{ json: { ok: true, toEmail: to, subject, html, fromEmail: body.from || 'noreply@lacasa-agency.com' } }];
+'@
+
+$node_prepareEmail = [ordered]@{
+    parameters = @{
+        jsCode = $jsPrepareEmail
+    }
+    name = '0n. Preparar Email'
+    type = 'n8n-nodes-base.code'
+    typeVersion = 2
+    position = @(700, 1500)
+}
+
+# Utility: Check if email preparation succeeded
+$node_ifEmailOk = [ordered]@{
+    parameters = @{
+        conditions = [ordered]@{
+            options = [ordered]@{
+                caseSensitive = $true
+                leftValue = ''
+                typeValidation = 'strict'
+            }
+            conditions = @(
+                [ordered]@{
+                    id = 'cond_email_ok'
+                    leftValue = '={{ $json.ok }}'
+                    rightValue = $true
+                    operator = [ordered]@{
+                        type = 'boolean'
+                        operation = 'true'
+                    }
+                }
+            )
+            combinator = 'and'
+        }
+    }
+    name = '0p. Email OK?'
+    type = 'n8n-nodes-base.if'
+    typeVersion = 2
+    position = @(920, 1500)
+}
+
+# Utility: Send email via SMTP
+$node_sendEmail = [ordered]@{
+    parameters = [ordered]@{
+        fromEmail = '={{ $json.fromEmail }}'
+        toEmail = '={{ $json.toEmail }}'
+        subject = '={{ $json.subject }}'
+        emailType = 'html'
+        html = '={{ $json.html }}'
+        options = @{}
+    }
+    name = '0o. Enviar Email'
+    type = 'n8n-nodes-base.emailSend'
+    typeVersion = 2.1
+    position = @(1140, 1400)
+    retryOnFail = $true
+    maxTries = 2
+    waitBetweenTries = 2000
+    credentials = [ordered]@{
+        smtp = [ordered]@{
+            id = '__SMTP_CRED_ID__'
+            name = 'SMTP La Casa'
+        }
+    }
+}
+
+# Utility: Email validation error passthrough
+$node_emailError = [ordered]@{
+    parameters = @{}
+    name = '0q. Email Error'
+    type = 'n8n-nodes-base.noOp'
+    typeVersion = 1
+    position = @(1140, 1600)
 }
 
 # Utility: Prepare WhatsApp message for Twilio
@@ -1361,6 +1467,10 @@ $workflow = [ordered]@{
         $node_formatDriveList,
         $node_prepareShare,
         $node_execShare,
+        $node_prepareEmail,
+        $node_ifEmailOk,
+        $node_sendEmail,
+        $node_emailError,
         $node_prepareWA,
         $node_ifWAOk,
         $node_sendWA,
@@ -1407,6 +1517,7 @@ $workflow = [ordered]@{
                 @([ordered]@{ node = '0f. Preparar WA'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0j. Listar Carpeta'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0l. Preparar Share'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0n. Preparar Email'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
             )
         }
@@ -1415,6 +1526,15 @@ $workflow = [ordered]@{
         }
         '0l. Preparar Share' = [ordered]@{
             main = @(,@([ordered]@{ node = '0m. Compartir Carpeta'; type = 'main'; index = 0 }))
+        }
+        '0n. Preparar Email' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0p. Email OK?'; type = 'main'; index = 0 }))
+        }
+        '0p. Email OK?' = [ordered]@{
+            main = @(
+                @([ordered]@{ node = '0o. Enviar Email'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0q. Email Error'; type = 'main'; index = 0 })
+            )
         }
         '0f. Preparar WA' = [ordered]@{
             main = @(,@([ordered]@{ node = '0h. WA OK?'; type = 'main'; index = 0 }))

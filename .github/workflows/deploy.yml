@@ -44,11 +44,43 @@ jobs:
           echo "$CHANGED" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Ensure SMTP credential exists
+        if: steps.changed.outputs.files != ''
+        id: smtp
+        env:
+          N8N_URL: ${{ secrets.N8N_URL }}
+          N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+        run: |
+          # Check if an SMTP credential already exists
+          EXISTING=$(curl -s "$N8N_URL/api/v1/credentials" \
+            -H "X-N8N-API-KEY: $N8N_API_KEY" \
+            | jq -r '[.data[] | select(.type == "smtp")] | .[0].id // empty' 2>/dev/null || true)
+
+          if [ -n "$EXISTING" ]; then
+            echo "SMTP credential found: $EXISTING"
+            echo "id=$EXISTING" >> $GITHUB_OUTPUT
+          else
+            echo "Creating SMTP credential..."
+            RESP=$(curl -s -X POST "$N8N_URL/api/v1/credentials" \
+              -H "X-N8N-API-KEY: $N8N_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d '{"name":"SMTP La Casa","type":"smtp","data":{"host":"smtp.gmail.com","port":587,"secure":false,"user":"","password":""}}')
+            SMTP_ID=$(echo "$RESP" | jq -r '.id // empty')
+            if [ -n "$SMTP_ID" ]; then
+              echo "SMTP credential created: $SMTP_ID"
+              echo "id=$SMTP_ID" >> $GITHUB_OUTPUT
+            else
+              echo "::warning::Could not create SMTP credential. Email features will not work until configured manually."
+              echo "id=" >> $GITHUB_OUTPUT
+            fi
+          fi
+
       - name: Deploy changed workflows to n8n
         if: steps.changed.outputs.files != ''
         env:
           N8N_URL: ${{ secrets.N8N_URL }}
           N8N_API_KEY: ${{ secrets.N8N_API_KEY }}
+          SMTP_CRED_ID: ${{ steps.smtp.outputs.id }}
         run: |
           echo "::notice::DEPLOY_START files=${{ steps.changed.outputs.files }}"
           MAPPING=$(cat workflows/mapping.json)
@@ -91,7 +123,14 @@ jobs:
               -H "X-N8N-API-KEY: $N8N_API_KEY" || true
 
             # Whitelist: only send fields n8n PUT API expects
-            jq '{name,nodes,connections,settings:(.settings|del(.maxConcurrency,.availableInMCP))} + if .staticData != null then {staticData} else {} end' "$FILE" > /tmp/payload.json
+            jq '{name,nodes,connections,settings:(.settings|del(.maxConcurrency,.availableInMCP))} + if .staticData != null then {staticData} else {} end' "$FILE" > /tmp/payload_raw.json
+
+            # Inject SMTP credential ID if placeholder exists
+            if [ -n "$SMTP_CRED_ID" ]; then
+              jq --arg id "$SMTP_CRED_ID" '(.nodes[] | select(.credentials?.smtp?.id == "__SMTP_CRED_ID__") | .credentials.smtp.id) = $id' /tmp/payload_raw.json > /tmp/payload.json
+            else
+              cp /tmp/payload_raw.json /tmp/payload.json
+            fi
 
             HTTP_STATUS=$(curl -s -o /tmp/response.json -w "%{http_code}" \
               --max-time 30 \
