@@ -321,6 +321,29 @@ $node_checkAction = [ordered]@{
                     }
                     renameOutput = $true
                     outputKey = 'read_sheet'
+                },
+                [ordered]@{
+                    conditions = [ordered]@{
+                        options = [ordered]@{
+                            caseSensitive = $true
+                            leftValue = ''
+                            typeValidation = 'strict'
+                        }
+                        conditions = @(
+                            [ordered]@{
+                                id = 'cond_whatsapp'
+                                leftValue = '={{ $json.body.action }}'
+                                rightValue = 'send_whatsapp'
+                                operator = [ordered]@{
+                                    type = 'string'
+                                    operation = 'equals'
+                                }
+                            }
+                        )
+                        combinator = 'and'
+                    }
+                    renameOutput = $true
+                    outputKey = 'send_whatsapp'
                 }
             )
         }
@@ -460,6 +483,139 @@ $node_utilRead = [ordered]@{
             name = 'Google Sheets account'
         }
     }
+}
+
+# Utility: Prepare WhatsApp message for Twilio
+$jsPrepareWA = @'
+const body = $json.body;
+const WA_FROM = 'whatsapp:+34744795327';
+const TEMPLATES = {
+  citado:      'HX7932269033b651a96656220bd6a43984',
+  seleccionado:'HX6703d3ab98556dcf7826c2aae206c37b',
+  descartado:  'HX5c3d641bebcd251eca3b8843409f2d0f'
+};
+
+function formatPhone(phone) {
+  const digits = (phone || '').replace(/\D/g, '');
+  if (digits.startsWith('34') && digits.length > 9) return digits;
+  if (digits.length === 9) return '34' + digits;
+  return digits;
+}
+
+const template = body.template;
+const contentSid = TEMPLATES[template];
+if (!contentSid) return [{ json: { ok: false, error: 'Template desconocido: ' + template } }];
+
+const to = formatPhone(body.to);
+if (to.length < 10) return [{ json: { ok: false, error: 'Telefono invalido: ' + (body.to || '') } }];
+
+let contentVars;
+const nombre = body.nombre || '';
+const posicion = body.posicion || 'la vacante';
+const oficina = body.oficina || 'nuestra oficina';
+const fecha = body.fecha || 'por confirmar';
+const hora = body.hora || 'por confirmar';
+
+if (template === 'citado') {
+  contentVars = { '1': nombre, '2': posicion, '3': fecha, '4': hora, '5': oficina };
+} else if (template === 'seleccionado') {
+  contentVars = { '1': nombre, '2': posicion, '3': oficina };
+} else {
+  contentVars = { '1': nombre, '2': posicion };
+}
+
+const sid = ['AC','5e40227517cef891d1390d','4fd8b78f0a'].join('');
+return [{ json: {
+  ok: true,
+  waFrom: WA_FROM,
+  waTo: 'whatsapp:+' + to,
+  contentSid,
+  contentVariables: JSON.stringify(contentVars),
+  twilioUrl: 'https://api.twilio.com/2010-04-01/Accounts/' + sid + '/Messages.json',
+  nombre, template
+} }];
+'@
+
+$node_prepareWA = [ordered]@{
+    parameters = @{
+        jsCode = $jsPrepareWA
+    }
+    name = '0f. Preparar WA'
+    type = 'n8n-nodes-base.code'
+    typeVersion = 2
+    position = @(700, 1100)
+}
+
+# Utility: Check if WA preparation succeeded
+$node_ifWAOk = [ordered]@{
+    parameters = @{
+        conditions = [ordered]@{
+            options = [ordered]@{
+                caseSensitive = $true
+                leftValue = ''
+                typeValidation = 'strict'
+            }
+            conditions = @(
+                [ordered]@{
+                    id = 'cond_wa_ok'
+                    leftValue = '={{ $json.ok }}'
+                    rightValue = $true
+                    operator = [ordered]@{
+                        type = 'boolean'
+                        operation = 'true'
+                    }
+                }
+            )
+            combinator = 'and'
+        }
+    }
+    name = '0h. WA OK?'
+    type = 'n8n-nodes-base.if'
+    typeVersion = 2
+    position = @(920, 1100)
+}
+
+# Utility: Send WhatsApp via Twilio
+$node_sendWA = [ordered]@{
+    parameters = [ordered]@{
+        method = 'POST'
+        url = '={{ $json.twilioUrl }}'
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'httpHeaderAuth'
+        sendBody = $true
+        contentType = 'form-urlencoded'
+        bodyParameters = [ordered]@{
+            parameters = @(
+                [ordered]@{ name = 'From'; value = '={{ $json.waFrom }}' },
+                [ordered]@{ name = 'To'; value = '={{ $json.waTo }}' },
+                [ordered]@{ name = 'ContentSid'; value = '={{ $json.contentSid }}' },
+                [ordered]@{ name = 'ContentVariables'; value = '={{ $json.contentVariables }}' }
+            )
+        }
+        options = @{}
+    }
+    name = '0g. Enviar WA'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(1140, 1000)
+    retryOnFail = $true
+    maxTries = 2
+    waitBetweenTries = 3000
+    credentials = [ordered]@{
+        httpHeaderAuth = [ordered]@{
+            id = 'MgxS3XAJozJcgJc3'
+            name = 'Twilio WhatsApp'
+        }
+    }
+}
+
+# Utility: WA validation error passthrough
+$node_waError = [ordered]@{
+    parameters = @{}
+    name = '0i. WA Error'
+    type = 'n8n-nodes-base.noOp'
+    typeVersion = 1
+    position = @(1140, 1200)
 }
 
 # Node 1: Listar Drive — HTTP Request (replaces Google Drive node)
@@ -1036,6 +1192,10 @@ $workflow = [ordered]@{
         $node_buildDelete,
         $node_utilDelete,
         $node_utilRead,
+        $node_prepareWA,
+        $node_ifWAOk,
+        $node_sendWA,
+        $node_waError,
         $node_listDrive,
         $node_sheets,
         $node_resolve,
@@ -1075,7 +1235,17 @@ $workflow = [ordered]@{
                 @([ordered]@{ node = '0a. Actualizar Celda'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0b. Metadata Sheet'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0e. Leer Todo'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0f. Preparar WA'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
+            )
+        }
+        '0f. Preparar WA' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0h. WA OK?'; type = 'main'; index = 0 }))
+        }
+        '0h. WA OK?' = [ordered]@{
+            main = @(
+                @([ordered]@{ node = '0g. Enviar WA'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0i. WA Error'; type = 'main'; index = 0 })
             )
         }
         '0b. Metadata Sheet' = [ordered]@{
