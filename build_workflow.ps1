@@ -344,6 +344,29 @@ $node_checkAction = [ordered]@{
                     }
                     renameOutput = $true
                     outputKey = 'send_whatsapp'
+                },
+                [ordered]@{
+                    conditions = [ordered]@{
+                        options = [ordered]@{
+                            caseSensitive = $true
+                            leftValue = ''
+                            typeValidation = 'strict'
+                        }
+                        conditions = @(
+                            [ordered]@{
+                                id = 'cond_listdrive'
+                                leftValue = '={{ $json.body.action }}'
+                                rightValue = 'list_drive'
+                                operator = [ordered]@{
+                                    type = 'string'
+                                    operation = 'equals'
+                                }
+                            }
+                        )
+                        combinator = 'and'
+                    }
+                    renameOutput = $true
+                    outputKey = 'list_drive'
                 }
             )
         }
@@ -483,6 +506,69 @@ $node_utilRead = [ordered]@{
             name = 'Google Sheets account'
         }
     }
+}
+
+# Utility: List Drive files in root folder (for dashboard panel)
+$node_utilListDrive = [ordered]@{
+    parameters = [ordered]@{
+        method = 'GET'
+        url = 'https://www.googleapis.com/drive/v3/files'
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleDriveOAuth2Api'
+        sendQuery = $true
+        queryParameters = [ordered]@{
+            parameters = @(
+                [ordered]@{
+                    name = 'q'
+                    value = "'18gdeXN_QaFNQf-tktV2F0a0G-z6XKo92' in parents and trashed=false"
+                },
+                [ordered]@{
+                    name = 'fields'
+                    value = 'files(id,name,mimeType,createdTime)'
+                },
+                [ordered]@{
+                    name = 'orderBy'
+                    value = 'createdTime desc'
+                },
+                [ordered]@{
+                    name = 'pageSize'
+                    value = '50'
+                }
+            )
+        }
+        options = @{}
+    }
+    name = '0j. Listar Carpeta'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(700, 1100)
+    credentials = [ordered]@{
+        googleDriveOAuth2Api = [ordered]@{
+            id = 'wW0N2uPI0lkwY2p7'
+            name = 'Google Drive account'
+        }
+    }
+}
+
+$jsFormatDriveList = @'
+const resp = $json;
+const files = (resp.files || []).map(f => ({
+  name: f.name,
+  id: f.id,
+  mimeType: f.mimeType,
+  createdTime: f.createdTime
+}));
+return [{ json: { files } }];
+'@
+
+$node_formatDriveList = [ordered]@{
+    parameters = @{
+        jsCode = $jsFormatDriveList
+    }
+    name = '0k. Formatear Lista'
+    type = 'n8n-nodes-base.code'
+    typeVersion = 2
+    position = @(900, 1100)
 }
 
 # Utility: Prepare WhatsApp message for Twilio
@@ -1192,6 +1278,8 @@ $workflow = [ordered]@{
         $node_buildDelete,
         $node_utilDelete,
         $node_utilRead,
+        $node_utilListDrive,
+        $node_formatDriveList,
         $node_prepareWA,
         $node_ifWAOk,
         $node_sendWA,
@@ -1236,8 +1324,12 @@ $workflow = [ordered]@{
                 @([ordered]@{ node = '0b. Metadata Sheet'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0e. Leer Todo'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0f. Preparar WA'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0j. Listar Carpeta'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
             )
+        }
+        '0j. Listar Carpeta' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0k. Formatear Lista'; type = 'main'; index = 0 }))
         }
         '0f. Preparar WA' = [ordered]@{
             main = @(,@([ordered]@{ node = '0h. WA OK?'; type = 'main'; index = 0 }))
