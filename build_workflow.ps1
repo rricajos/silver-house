@@ -367,6 +367,29 @@ $node_checkAction = [ordered]@{
                     }
                     renameOutput = $true
                     outputKey = 'list_drive'
+                },
+                [ordered]@{
+                    conditions = [ordered]@{
+                        options = [ordered]@{
+                            caseSensitive = $true
+                            leftValue = ''
+                            typeValidation = 'strict'
+                        }
+                        conditions = @(
+                            [ordered]@{
+                                id = 'cond_sharedrive'
+                                leftValue = '={{ $json.body.action }}'
+                                rightValue = 'share_drive'
+                                operator = [ordered]@{
+                                    type = 'string'
+                                    operation = 'equals'
+                                }
+                            }
+                        )
+                        combinator = 'and'
+                    }
+                    renameOutput = $true
+                    outputKey = 'share_drive'
                 }
             )
         }
@@ -569,6 +592,62 @@ $node_formatDriveList = [ordered]@{
     type = 'n8n-nodes-base.code'
     typeVersion = 2
     position = @(900, 1100)
+}
+
+# Utility: Prepare Share Drive permission body
+$jsPrepareShare = @'
+const body = $json.body || {};
+const email = (body.email || '').trim();
+const folderId = body.folderId || '18gdeXN_QaFNQf-tktV2F0a0G-z6XKo92';
+let permBody;
+if (email) {
+  permBody = { type: 'user', role: 'reader', emailAddress: email };
+} else {
+  permBody = { type: 'anyone', role: 'reader' };
+}
+return [{ json: { folderId, permBody, sendNotification: !!email } }];
+'@
+
+$node_prepareShare = [ordered]@{
+    parameters = @{
+        jsCode = $jsPrepareShare
+    }
+    name = '0l. Preparar Share'
+    type = 'n8n-nodes-base.code'
+    typeVersion = 2
+    position = @(700, 1300)
+}
+
+$node_execShare = [ordered]@{
+    parameters = [ordered]@{
+        method = 'POST'
+        url = '={{ "https://www.googleapis.com/drive/v3/files/" + $json.folderId + "/permissions" }}'
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleDriveOAuth2Api'
+        sendQuery = $true
+        queryParameters = [ordered]@{
+            parameters = @(
+                [ordered]@{
+                    name = 'sendNotificationEmail'
+                    value = '={{ $json.sendNotification }}'
+                }
+            )
+        }
+        sendBody = $true
+        specifyBody = 'json'
+        jsonBody = '={{ JSON.stringify($json.permBody) }}'
+        options = @{}
+    }
+    name = '0m. Compartir Carpeta'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(900, 1300)
+    credentials = [ordered]@{
+        googleDriveOAuth2Api = [ordered]@{
+            id = 'wW0N2uPI0lkwY2p7'
+            name = 'Google Drive account'
+        }
+    }
 }
 
 # Utility: Prepare WhatsApp message for Twilio
@@ -1280,6 +1359,8 @@ $workflow = [ordered]@{
         $node_utilRead,
         $node_utilListDrive,
         $node_formatDriveList,
+        $node_prepareShare,
+        $node_execShare,
         $node_prepareWA,
         $node_ifWAOk,
         $node_sendWA,
@@ -1325,11 +1406,15 @@ $workflow = [ordered]@{
                 @([ordered]@{ node = '0e. Leer Todo'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0f. Preparar WA'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0j. Listar Carpeta'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0l. Preparar Share'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
             )
         }
         '0j. Listar Carpeta' = [ordered]@{
             main = @(,@([ordered]@{ node = '0k. Formatear Lista'; type = 'main'; index = 0 }))
+        }
+        '0l. Preparar Share' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0m. Compartir Carpeta'; type = 'main'; index = 0 }))
         }
         '0f. Preparar WA' = [ordered]@{
             main = @(,@([ordered]@{ node = '0h. WA OK?'; type = 'main'; index = 0 }))
