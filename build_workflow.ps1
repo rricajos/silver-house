@@ -520,7 +520,7 @@ $node_utilListDrive = [ordered]@{
             parameters = @(
                 [ordered]@{
                     name = 'q'
-                    value = "'18gdeXN_QaFNQf-tktV2F0a0G-z6XKo92' in parents and trashed=false"
+                    value = "={{ `"'`" + (`$json.body.folderId || '18gdeXN_QaFNQf-tktV2F0a0G-z6XKo92') + `"' in parents and trashed=false`" }}"
                 },
                 [ordered]@{
                     name = 'fields'
