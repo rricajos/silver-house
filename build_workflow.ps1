@@ -413,6 +413,29 @@ $node_checkAction = [ordered]@{
                     }
                     renameOutput = $true
                     outputKey = 'send_email'
+                },
+                [ordered]@{
+                    conditions = [ordered]@{
+                        options = [ordered]@{
+                            caseSensitive = $true
+                            leftValue = ''
+                            typeValidation = 'strict'
+                        }
+                        conditions = @(
+                            [ordered]@{
+                                id = 'cond_getpdf'
+                                leftValue = '={{ $json.body.action }}'
+                                rightValue = 'get_pdf'
+                                operator = [ordered]@{
+                                    type = 'string'
+                                    operation = 'equals'
+                                }
+                            }
+                        )
+                        combinator = 'and'
+                    }
+                    renameOutput = $true
+                    outputKey = 'get_pdf'
                 }
             )
         }
@@ -754,6 +777,63 @@ $node_emailError = [ordered]@{
     type = 'n8n-nodes-base.noOp'
     typeVersion = 1
     position = @(1140, 1600)
+}
+
+# Utility: Download PDF from Google Drive
+$node_downloadPdf = [ordered]@{
+    parameters = [ordered]@{
+        method = 'GET'
+        url = '={{ "https://www.googleapis.com/drive/v3/files/" + $json.body.fileId + "?alt=media" }}'
+        authentication = 'predefinedCredentialType'
+        nodeCredentialType = 'googleDriveOAuth2Api'
+        options = @{}
+    }
+    name = '0r. Descargar PDF'
+    type = 'n8n-nodes-base.httpRequest'
+    typeVersion = 4.2
+    position = @(700, 1700)
+    credentials = [ordered]@{
+        googleDriveOAuth2Api = [ordered]@{
+            id = 'wW0N2uPI0lkwY2p7'
+            name = 'Google Drive account'
+        }
+    }
+}
+
+# Utility: Extract binary to base64 JSON
+$node_extractBase64 = [ordered]@{
+    parameters = [ordered]@{
+        mode = 'manual'
+        duplicateItem = $false
+        assignments = [ordered]@{
+            assignments = @(
+                [ordered]@{
+                    id = 'assign_base64'
+                    name = 'base64'
+                    value = '={{ $binary.data.data }}'
+                    type = 'string'
+                },
+                [ordered]@{
+                    id = 'assign_mime'
+                    name = 'mimeType'
+                    value = '={{ $binary.data.mimeType }}'
+                    type = 'string'
+                },
+                [ordered]@{
+                    id = 'assign_ok'
+                    name = 'ok'
+                    value = '={{ true }}'
+                    type = 'boolean'
+                }
+            )
+        }
+        includeOtherFields = $false
+        options = @{}
+    }
+    name = '0s. Extraer Base64'
+    type = 'n8n-nodes-base.set'
+    typeVersion = 3.4
+    position = @(920, 1700)
 }
 
 # Utility: Prepare WhatsApp message for Twilio
@@ -1471,6 +1551,8 @@ $workflow = [ordered]@{
         $node_ifEmailOk,
         $node_sendEmail,
         $node_emailError,
+        $node_downloadPdf,
+        $node_extractBase64,
         $node_prepareWA,
         $node_ifWAOk,
         $node_sendWA,
@@ -1518,6 +1600,7 @@ $workflow = [ordered]@{
                 @([ordered]@{ node = '0j. Listar Carpeta'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0l. Preparar Share'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0n. Preparar Email'; type = 'main'; index = 0 }),
+                @([ordered]@{ node = '0r. Descargar PDF'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 })
             )
         }
@@ -1535,6 +1618,9 @@ $workflow = [ordered]@{
                 @([ordered]@{ node = '0o. Enviar Email'; type = 'main'; index = 0 }),
                 @([ordered]@{ node = '0q. Email Error'; type = 'main'; index = 0 })
             )
+        }
+        '0r. Descargar PDF' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0s. Extraer Base64'; type = 'main'; index = 0 }))
         }
         '0f. Preparar WA' = [ordered]@{
             main = @(,@([ordered]@{ node = '0h. WA OK?'; type = 'main'; index = 0 }))
