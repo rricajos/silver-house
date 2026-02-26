@@ -228,6 +228,26 @@ $node_webhook = [ordered]@{
     webhookId = 'demo-lacasa-webhook'
 }
 
+# Auth: Validate API token from dashboard
+$jsAuth = @'
+const token = ($json.body && $json.body.token) || '';
+const VALID_TOKEN = 'tVI5cOh3mMfrukfQ0BjhJEgyCz9HPuia';
+if (token !== VALID_TOKEN) {
+  return [{ json: { error: 'Unauthorized' } }];
+}
+return $input.all();
+'@
+
+$node_auth = [ordered]@{
+    parameters = @{
+        jsCode = $jsAuth
+    }
+    name = '0. Auth'
+    type = 'n8n-nodes-base.code'
+    typeVersion = 2
+    position = @(370, 500)
+}
+
 # Utility: Switch node to route by action
 $node_checkAction = [ordered]@{
     parameters = [ordered]@{
@@ -1009,6 +1029,7 @@ $workflow = [ordered]@{
         $node_manual,
         $node_cron,
         $node_webhook,
+        $node_auth,
         $node_checkAction,
         $node_utilUpdate,
         $node_fetchMeta,
@@ -1044,6 +1065,9 @@ $workflow = [ordered]@{
             main = @(,@([ordered]@{ node = '1. Listar Drive'; type = 'main'; index = 0 }))
         }
         'Webhook Test' = [ordered]@{
+            main = @(,@([ordered]@{ node = '0. Auth'; type = 'main'; index = 0 }))
+        }
+        '0. Auth' = [ordered]@{
             main = @(,@([ordered]@{ node = '0. Accion?'; type = 'main'; index = 0 }))
         }
         '0. Accion?' = [ordered]@{
